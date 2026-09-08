@@ -291,6 +291,15 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 .learning-dialog { width: min(980px, calc(100% - 32px)); height: min(780px, calc(100dvh - 48px)); padding: 0; overflow: hidden; }
 .learning-dialog[open] { display: flex; flex-direction: column; }
 .learning-dialog > .dialog-heading { flex-shrink: 0; padding: 17px 21px; }
+.center-module-tabs { flex-shrink: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 14px 21px 0; }
+.center-module-tabs button { position: relative; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 11px 15px; border: 1px solid var(--line); border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
+.center-module-tabs button:hover { background: var(--raised); }
+.center-module-tabs button.active { border-color: var(--accent); background: var(--raised); }
+.center-module-tabs button.active::after { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent); border-radius: 1px; }
+.center-module-tabs button span { color: var(--muted); font: 8px 'IBM Plex Mono', monospace; letter-spacing: .1em; }
+.center-module-tabs button.active span { color: var(--accent); }
+.center-module-tabs button strong { color: var(--text); font-size: 12.5px; font-weight: 500; }
+.center-module-tabs button > svg { position: absolute; top: 13px; right: 13px; color: var(--accent); }
 .learning-center { display: grid; grid-template-columns: 170px minmax(0, 1fr); flex: 1; min-height: 0; }
 .learning-center > nav { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line); padding: 17px 12px; }
 .learning-center > nav button { display: flex; align-items: center; gap: 9px; min-height: 38px; color: var(--muted); border-radius: 4px; padding: 0 11px; font-size: 11px; text-align: left; }

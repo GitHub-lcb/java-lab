@@ -1,0 +1,71 @@
+import { redisLabs } from './redisCatalog.js';
+import { jvmLabs } from './jvmCatalog.js';
+
+export const labs = [
+  {
+    id: 'hashmap', group: 'Java 核心', title: 'HashMap 存储与扩容', short: 'HashMap', icon: 'Boxes', tag: '集合框架', number: '01',
+    summary: '从一个 key 出发，观察哈希寻址、碰撞与扩容的全过程。',
+    defaults: { capacity: 4, factor: 0.75, entries: 6 },
+    fields: [
+      { key: 'capacity', label: '初始容量', type: 'select', options: [[4, '4'], [8, '8'], [16, '16']] },
+      { key: 'factor', label: '负载因子', type: 'select', options: [[0.5, '0.50'], [0.75, '0.75'], [1, '1.00']] },
+      { key: 'entries', label: '插入数量', min: 1, max: 12, unit: '个' },
+    ],
+    metrics: [['size', '元素数量', ''], ['capacity', '当前容量', ''], ['threshold', '扩容阈值', ''], ['resizes', '扩容次数', '次']],
+    nodes: [['key', '输入键值', 'String key', 'Braces', 'blue'], ['hash', '哈希扰动', 'hash ^ (hash >>> 16)', 'Binary', 'yellow'], ['buckets', '数组与链表', 'Node<K, V>[] table', 'Boxes', 'green'], ['resize', '容量扩展', 'newCap = oldCap << 1', 'Expand', 'pink']],
+    edges: [['key', 'hash', 'hashCode()'], ['hash', 'buckets', '(n - 1) & hash'], ['buckets', 'resize', 'size > threshold']],
+    code: ['Map<String, Integer> map = new HashMap<>();', 'int h = key.hashCode() ^ (key.hashCode() >>> 16);', 'int index = (table.length - 1) & h;', 'if (++size > threshold) resize();'],
+    theory: [['寻址公式', 'index = (n − 1) & hash', '容量为 2 的幂，使位运算均匀映射到桶。'], ['扩容时机', 'size > capacity × loadFactor', '插入新元素后超过阈值才触发扩容。'], ['碰撞不是覆盖', 'Aa.hashCode() = BB.hashCode()', '哈希相同的不同 key 仍通过 equals 区分。']],
+    boundary: '以 JDK 8+ 的字符串键为例，演示数组、碰撞和扩容；未模拟红黑树树化。初始容量按已分配 table 展示。',
+    source: 'https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/HashMap.html',
+  },
+  {
+    id: 'threadpool', group: 'Java 核心', title: '线程池任务调度', short: '线程池', icon: 'Workflow', tag: '并发编程', number: '02',
+    summary: '一个任务提交之后，究竟会创建线程、进入队列，还是被拒绝？',
+    defaults: { core: 2, max: 4, queue: 3, tasks: 10, policy: 'abort' },
+    fields: [
+      { key: 'core', label: '核心线程数', min: 1, max: 4, unit: '个' },
+      { key: 'max', label: '最大线程数', min: 1, max: 6, unit: '个' },
+      { key: 'queue', label: '队列容量', min: 1, max: 6, unit: '个' },
+      { key: 'tasks', label: '提交任务数', min: 1, max: 16, unit: '个' },
+      { key: 'policy', label: '拒绝策略', type: 'select', options: [['abort', 'AbortPolicy'], ['caller', 'CallerRunsPolicy']] },
+    ],
+    metrics: [['submitted', '已提交', ''], ['workers', '工作线程', ''], ['queued', '排队任务', ''], ['rejected', '被拒绝', '']],
+    nodes: [['submit', '任务提交', 'execute(Runnable)', 'Send', 'blue'], ['queue', '阻塞队列', 'ArrayBlockingQueue', 'ListOrdered', 'yellow'], ['workers', '工作线程', 'Worker threads', 'Cpu', 'green'], ['reject', '饱和策略', 'RejectedExecutionHandler', 'ShieldAlert', 'pink']],
+    edges: [['submit', 'workers', '① 核心线程'], ['submit', 'queue', '② 入队'], ['queue', 'workers', '③ 扩展线程'], ['queue', 'reject', '④ 饱和']],
+    code: ['executor.execute(task);', 'if (workers < corePoolSize) addWorker(task, true);', 'else if (workQueue.offer(task)) return;', 'else if (workers < maximumPoolSize) addWorker(task, false);', 'else handler.rejectedExecution(task, executor);'],
+    theory: [['接收顺序', '核心线程 → 队列 → 最大线程', '先入队，再扩展非核心线程，而非直接扩到最大值。'], ['拒绝条件', '队列已满 && workers = max', 'AbortPolicy 抛出 RejectedExecutionException。'], ['反压策略', 'CallerRunsPolicy', '调用线程执行任务，可能减缓继续提交的速率。']],
+    boundary: '展示任务在工作线程持续忙碌时的接收顺序，不模拟任务结束、线程回收与真实并发时序。CallerRuns 任务按顺序完成。',
+    source: 'https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html',
+  },
+  ...jvmLabs,
+  ...redisLabs,
+  {
+    id: 'mysql', group: '数据与缓存', title: 'MySQL 索引查询', short: 'MySQL 索引查询', icon: 'Network', tag: '数据库原理', number: '05',
+    summary: '对比索引定位与全表扫描，观察 B+ 树叶子页和记录的访问路径。',
+    defaults: { indexed: true, target: 42 },
+    fields: [{ key: 'target', label: '查询 ID', min: 1, max: 64, unit: '' }, { key: 'indexed', label: '使用主键索引', type: 'toggle' }],
+    metrics: [['reads', '访问页数', '页'], ['scanned', '检查记录', '行'], ['target', '目标 ID', ''], ['found', '查询结果', '']],
+    nodes: [['query', 'SQL 查询', 'WHERE id = ?', 'CodeXml', 'blue'], ['index', 'B+ 树根页', '17 | 33 | 49', 'Network', 'yellow'], ['leaf', '叶子数据页', 'Clustered index', 'Table2', 'green'], ['result', '查询结果', 'Row data', 'FileCheck2', 'pink']],
+    edges: [['query', 'index', '索引定位'], ['index', 'leaf', '定位叶子页'], ['leaf', 'result', '返回记录']],
+    code: ['SELECT * FROM users WHERE id = ?;', '// B+ tree: search root page', '// Clustered leaf: locate the row within the page', '// Full scan: examine records page by page', '// Return the matching row'],
+    theory: [['聚簇索引', '叶子节点保存完整记录', '按主键查询无需额外回表。'], ['页内查找', '有序记录定位', '演示固定两层索引与每页 16 条记录。'], ['成本比较', '逻辑页访问 ≠ 物理磁盘 I/O', '实际读取成本还受 Buffer Pool 和优化器影响。']],
+    boundary: '固定 64 行、两层树与每页 16 行的教学模型，统计逻辑页访问及检查记录数，不是 MySQL EXPLAIN 或实际磁盘 I/O。',
+    source: 'https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html',
+  },
+  {
+    id: 'kafka', group: '消息中间件', title: 'Kafka 分区与消费组', short: 'Kafka 分区消费', icon: 'Waypoints', tag: '消息队列', number: '06',
+    summary: '观察消息写入分区、消费组分配和 offset 推进之间的关系。',
+    defaults: { partitions: 3, consumers: 2, messages: 9 },
+    fields: [{ key: 'partitions', label: 'Topic 分区数', min: 1, max: 6, unit: '个' }, { key: 'consumers', label: '消费组成员数', min: 1, max: 6, unit: '个' }, { key: 'messages', label: '发送消息数', min: 1, max: 15, unit: '条' }],
+    metrics: [['produced', '已生产', ''], ['consumed', '已消费', ''], ['lag', '消息积压', ''], ['idle', '空闲消费者', '']],
+    nodes: [['producer', '生产者', 'KafkaProducer', 'Send', 'blue'], ['broker', 'Topic 分区', 'orders.events', 'Layers', 'yellow'], ['consumer', '消费组', 'order-service-group', 'Workflow', 'green'], ['offset', '消费位点', '__consumer_offsets', 'LocateFixed', 'pink']],
+    edges: [['producer', 'broker', 'send()'], ['broker', 'consumer', 'poll()'], ['consumer', 'offset', 'commit offset']],
+    code: ['// One partition has one owner in the consumer group', 'producer.send(new ProducerRecord<>(topic, partition, key, value));', 'for (var record : consumer.poll(timeout)) process(record);', 'consumer.commitSync(nextOffsetsByPartition);'],
+    theory: [['组内分配', '一个分区 → 一个活跃消费者', '同一个消费组内，分区不会被多个成员同时消费。'], ['并行度上限', 'min(partitions, consumers)', '消费者数超过分区数时，多余成员空闲。'], ['消费位点', 'offset = 下一条待消费位置', '顺序保证仅限单个分区，不是 Topic 全局有序。']],
+    boundary: '消息显式轮询写入分区，消费组按轮询分配。先生产再消费，不模拟副本、故障、再均衡或事务；不是默认生产者分区器。',
+    source: 'https://kafka.apache.org/documentation/#intro_consumers',
+  },
+];
+export const groups = ['Java 核心', 'JVM 专题', 'Redis 专题', '数据与缓存', '消息中间件'];
+export const getLab = id => labs.find(lab => lab.id === id) || labs.find(lab => lab.id === 'redis');

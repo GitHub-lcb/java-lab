@@ -12,7 +12,7 @@ function outputValue(value) {
   return typeof value === 'number' ? `(integer) ${value}` : String(value);
 }
 
-export default function RealRedisLab({ lesson, onComplete, onReset, onProgress, active }) {
+export default function RealRedisLab({ lesson, onComplete, onProgress, active }) {
   const guide = realLabCatalog[lesson.id];
   const session = useMemo(() => lessonSession(createSessionId(), lesson.id), [lesson.id]);
   const [status, setStatus] = useState({ java: false, redis: false, loading: true, message: '正在检测连接' });
@@ -60,12 +60,24 @@ export default function RealRedisLab({ lesson, onComplete, onReset, onProgress, 
     } finally { setBusy(false); busyRef.current = false; }
   }
   function restart() {
-    if (busyRef.current) return;
     setRun(createRun()); setCommand(guide.steps[0].command); setHistory([]); setFeedback(null);
-    onReset(lesson.id);
+    setConfirmingRestart(false);
+  }
+  const [confirmingRestart, setConfirmingRestart] = useState(false);
+  const confirmTimer = useRef(null);
+  useEffect(() => () => clearTimeout(confirmTimer.current), []);
+  function requestRestart() {
+    if (busyRef.current) return;
+    if (!confirmingRestart) {
+      setConfirmingRestart(true);
+      confirmTimer.current = setTimeout(() => setConfirmingRestart(false), 4000);
+      return;
+    }
+    clearTimeout(confirmTimer.current);
+    restart();
   }
   return <section className="guided-runtime" aria-label="真实 Redis 引导实验">
-    <div className="guided-toolbar"><span><Terminal size={15} />{run.index}/{guide.steps.length} 步已验证</span><div><span className={status.redis ? 'online' : 'offline'}>{status.loading ? '检测中' : status.redis ? 'Redis 已连接' : status.message}</span><button title="重新检测" aria-label="重新检测" onClick={refresh} disabled={status.loading}><RotateCcw size={14} /></button><button onClick={restart} disabled={busy}><RotateCcw size={14} />重新开始</button></div></div>
+    <div className="guided-toolbar"><span><Terminal size={15} />{run.index}/{guide.steps.length} 步已验证</span><div><span className={status.redis ? 'online' : 'offline'}>{status.loading ? '检测中' : status.redis ? 'Redis 已连接' : status.message}</span><button title="重新检测" aria-label="重新检测" onClick={refresh} disabled={status.loading}><RotateCcw size={14} /></button><button className={confirmingRestart ? 'confirm-restart' : undefined} title={confirmingRestart ? '再次点击将清空本次执行记录并回到第一步' : '清空本次执行记录，回到第一步'} aria-label={confirmingRestart ? '再次点击以确认清空执行记录并重新开始' : '重新开始'} onClick={requestRestart} disabled={busy}><RotateCcw size={14} />{confirmingRestart ? '确认重新开始？' : '重新开始'}</button></div></div>
     <div className="guided-current">
       {stage ? <><div><strong>步骤 {run.index + 1} · {stage.title}</strong><code>{stage.command}</code></div><p><span>预期返回</span>{stage.expectText}</p></> : <div><strong><Check size={17} />本轮 {guide.steps.length} 步均已通过返回值验证</strong><p>{guide.scope}</p></div>}
     </div>

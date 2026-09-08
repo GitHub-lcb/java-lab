@@ -316,9 +316,9 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 .path-index.done { color: var(--accent); }
 .path-lessons strong { display: block; font-size: 11px; font-weight: 550; }
 .path-lessons small { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--faint); font-size: 9px; margin-top: 7px; }
-.path-lessons small i { width: 5px; height: 5px; border-radius: 50%; background: var(--line); margin-left: 7px; }
+.path-lessons small i { width: 6px; height: 6px; border-radius: 50%; background: transparent; border: 1px solid var(--faint); margin-left: 7px; }
 .path-lessons small i:first-child { margin-left: 0; }
-.path-lessons small i.done { background: var(--accent); }
+.path-lessons small i.done { background: var(--accent); border-color: var(--accent); }
 .stage-list { display: grid; gap: 9px; }
 .stage-list article { display: flex; align-items: center; gap: 15px; min-height: 82px; border: 1px solid var(--line); border-radius: 6px; padding: 14px 15px; }
 .stage-number { width: 33px; color: var(--faint); font: 13px 'IBM Plex Mono', monospace; }
@@ -462,6 +462,10 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 .guided-feedback { display: flex; align-items: flex-start; gap: 8px; padding: 12px 15px; border-top: 1px solid var(--line); color: #d1ac79; font-size: 11px; line-height: 1.8; margin: 0; }
 .guided-feedback svg { margin-top: 3px; }
 .guided-feedback.passed { color: var(--accent); }
+.guided-offline { display: flex; align-items: flex-start; gap: 8px; padding: 11px 15px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #d1ac79 9%, transparent); font-size: 11px; line-height: 1.8; }
+.guided-offline > svg { flex-shrink: 0; margin-top: 4px; color: #d1ac79; }
+.guided-offline p { margin: 0; color: var(--muted); }
+.guided-offline code { color: var(--text); font: 11px 'IBM Plex Mono', monospace; background: var(--raised); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; white-space: nowrap; }
 .real-step-list strong { font-size: 10px; display: block; margin-bottom: 4px; font-weight: 500; }
 .real-step-list .current { border-left: 2px solid var(--accent); padding-left: 8px; }
 .real-step-list .current strong { color: var(--text); }
@@ -495,6 +499,9 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 .probe-empty { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--accent); }
 .probe-empty p { color: var(--muted); font-size: 11px; }
 .probe-empty.error { color: #cf7286; }
+.probe-empty .probe-hint { display: flex; align-items: flex-start; gap: 7px; max-width: 400px; text-align: left; color: #d1ac79; font-size: 10px; line-height: 1.8; margin-top: 6px; }
+.probe-empty .probe-hint svg { flex-shrink: 0; margin-top: 3px; }
+.probe-empty .probe-hint code { color: var(--text); font: 10px 'IBM Plex Mono', monospace; background: var(--raised); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 .probe-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .probe-value { min-width: 0; border-left: 2px solid var(--line); padding: 7px 10px; }
 .probe-value > span { display: block; color: var(--faint); font-size: 9px; margin-bottom: 6px; }

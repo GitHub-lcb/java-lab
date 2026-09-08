@@ -25,5 +25,5 @@ export function writeLocal(key, value) {
 export function playbackView(context, frames) {
   const currentRun = context.frames === frames;
   const index = currentRun ? Math.min(context.index, frames.length - 1) : 0;
-  return { index, complete: currentRun && index === frames.length - 1 };
+  return { index, complete: currentRun && !!context.completed };
 }

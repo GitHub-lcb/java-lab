@@ -26,8 +26,8 @@ export default function RealJvmLab({ lesson }) {
     try {
       const result = await fetchJvmProbe((url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(8000) }), API_BASE, config.probe);
       setState({ loading: false, data: result.data, error: '' });
-    } catch (error) { setState({ loading: false, data: null, error: error.message }); }
+    } catch (error) { setState({ loading: false, data: null, error: error.message, offline: error instanceof TypeError || error.name === 'TimeoutError' }); }
   }
   useEffect(() => { run(); }, [lesson.id]);
-  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} /><p>{state.error}</p></div> : <ProbeData data={state.data} />}</div></section>;
+  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} /><p>{state.error}</p>{state.offline && <p className="probe-hint"><Info size={13} />需要本机 Java 网关：在项目根目录执行 <code>npm run backend</code>（首次先 <code>npm ci</code>；需 JDK 8+ 的 <code>javac</code>），启动后点「重新采样」。</p>}</div> : <ProbeData data={state.data} />}</div></section>;
 }

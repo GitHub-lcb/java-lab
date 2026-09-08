@@ -32,14 +32,14 @@ function IconButton({ icon, label, ...props }) {
   return <button type="button" className="icon-button" title={label} aria-label={label} {...props}><Icon name={icon} /></button>;
 }
 const player = createMachine({
-  id: 'player', initial: 'paused', context: { index: 0, length: 1, frames: null },
+  id: 'player', initial: 'paused', context: { index: 0, length: 1, frames: null, completed: false },
   on: {
-    LOAD: { target: '.paused', actions: assign({ index: 0, length: ({ event }) => event.frames.length, frames: ({ event }) => event.frames }) },
-    RESET: { target: '.paused', actions: assign({ index: 0 }) },
-    SEEK: { target: '.paused', actions: assign({ index: ({ event, context }) => Math.max(0, Math.min(context.length - 1, event.index)) }) },
+    LOAD: { target: '.paused', actions: assign({ index: 0, length: ({ event }) => event.frames.length, frames: ({ event }) => event.frames, completed: false }) },
+    RESET: { target: '.paused', actions: assign({ index: 0, completed: false }) },
+    SEEK: { target: '.paused', actions: assign({ index: ({ event, context }) => Math.max(0, Math.min(context.length - 1, event.index)), completed: false }) },
     PREV: { target: '.paused', actions: assign({ index: ({ context }) => Math.max(0, context.index - 1) }) },
     NEXT: [
-      { guard: ({ context }) => context.index >= context.length - 2, target: '.paused', actions: assign({ index: ({ context }) => context.length - 1 }) },
+      { guard: ({ context }) => context.index >= context.length - 2, target: '.paused', actions: assign({ index: ({ context }) => context.length - 1, completed: true }) },
       { actions: assign({ index: ({ context }) => context.index + 1 }) },
     ],
   },
@@ -240,7 +240,7 @@ function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const toastTimer = useRef(null);
   const notify = React.useCallback(message => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2800); }, []);
-  const markComplete = React.useCallback(id => setCompleted(prev => { if (prev.includes(id)) return prev; const next = [...prev, id]; writeLocal('java-lab:completed', next); return next; }), []);
+  const markComplete = React.useCallback(id => setCompleted(prev => { if (prev.includes(id)) return prev; const next = [...prev, id]; writeLocal('java-lab:completed', next); notify('实验演示已完成，已记入学习记录'); return next; }), [notify]);
   const markAssessment = React.useCallback(id => setAssessments(prev => { if (prev.includes(id)) return prev; const next = [...prev, id]; writeLocal('java-lab:assessments', next); return next; }), []);
   const markChallengeRun = React.useCallback((lesson, params, metrics) => setChallengeRuns(prev => { const history = prev[lesson.id] || {}; const nextHistory = recordChallengeRun(lesson.challenge, history, params, metrics); if (nextHistory === history) return prev; const next = { ...prev, [lesson.id]: nextHistory }; writeLocal('java-lab:challenge-runs', next); return next; }), []);
   useEffect(() => { document.documentElement.dataset.theme = theme; writeLocal('java-lab:theme', theme); }, [theme]);

@@ -78,6 +78,7 @@ export default function RealRedisLab({ lesson, onComplete, onProgress, active })
   }
   return <section className="guided-runtime" aria-label="真实 Redis 引导实验">
     <div className="guided-toolbar"><span><Terminal size={15} />{run.index}/{guide.steps.length} 步已验证</span><div><span className={status.redis ? 'online' : 'offline'}>{status.loading ? '检测中' : status.redis ? 'Redis 已连接' : status.message}</span><button title="重新检测" aria-label="重新检测" onClick={refresh} disabled={status.loading}><RotateCcw size={14} /></button><button className={confirmingRestart ? 'confirm-restart' : undefined} title={confirmingRestart ? '再次点击将清空本次执行记录并回到第一步' : '清空本次执行记录，回到第一步'} aria-label={confirmingRestart ? '再次点击以确认清空执行记录并重新开始' : '重新开始'} onClick={requestRestart} disabled={busy}><RotateCcw size={14} />{confirmingRestart ? '确认重新开始？' : '重新开始'}</button></div></div>
+    {!status.loading && !status.redis && <div className="guided-offline" role="status"><Info size={14} /><p>{status.java ? <>Redis 不可达：先运行 <code>docker compose -f server/docker-compose.yml up -d</code> 启动容器版 Redis，或本机启动 <code>redis-server</code>（默认 127.0.0.1:6379），再点重新检测。</> : <>需要先启动本机 Java 网关：在项目根目录执行 <code>npm run backend</code>（首次先 <code>npm ci</code>；需 JDK 8+ 的 <code>javac</code>）。</>}</p></div>}
     <div className="guided-current">
       {stage ? <><div><strong>步骤 {run.index + 1} · {stage.title}</strong><code>{stage.command}</code></div><p><span>预期返回</span>{stage.expectText}</p></> : <div><strong><Check size={17} />本轮 {guide.steps.length} 步均已通过返回值验证</strong><p>{guide.scope}</p></div>}
     </div>

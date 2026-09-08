@@ -27,7 +27,10 @@ test('Changing parameters cannot mark a new run complete using an old index', ()
   assert.equal(view.index, 0);
   assert.equal(view.complete, false);
 });
-test('Only the last frame of the loaded run is complete', () => {
+test('Only a run that stepped or played to the last frame is complete', () => {
   const frames = [{}, {}];
-  assert.equal(playbackView({ frames, index: 1 }, frames).complete, true);
+  assert.equal(playbackView({ frames, index: 1, completed: true }, frames).complete, true);
+  assert.equal(playbackView({ frames, index: 0, completed: true }, frames).complete, true);
+  assert.equal(playbackView({ frames, index: 1, completed: false }, frames).complete, false);
+  assert.equal(playbackView({ frames, index: 1 }, frames).complete, false);
 });

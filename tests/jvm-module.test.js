@@ -147,3 +147,28 @@ test('Collector lesson observes the current JVM without claiming a comparison be
   assert.equal(jvmProbeCatalog[lesson.id].probe, 'gc');
   assert.match(jvmProbeCatalog[lesson.id].boundary, /不.*基准/);
 });
+
+test('Tiered compilation splits interpreted and C1/C2 work at the invocation-count thresholds', () => {
+  const lesson = labs.find(lab => lab.id === 'jvm-jit');
+  assert.equal(lesson.milestone, 'diagnostics');
+  assert.equal(jvmProbeCatalog[lesson.id].probe, 'runtime');
+  const six = simulate('jvm-jit', { mode: 'tiered', calls: 600, threshold: 200, inline: true, escape: true }).at(-1);
+  assert.deepEqual({ ...six.metrics }, { interpreted: 300, c1: 300, c2: 0, inlined: 0, escapes: 0 });
+  const thousand = simulate('jvm-jit', { mode: 'tiered', calls: 1000, threshold: 200, inline: true, escape: true }).at(-1);
+  assert.deepEqual({ ...thousand.metrics }, { interpreted: 300, c1: 300, c2: 400, inlined: 0, escapes: 0 });
+  assert.equal(six.dataLabel, 'COMPILE TRACE');
+});
+test('Inlining and escape analysis only apply once the call site is compiled to C2', () => {
+  const on = simulate('jvm-jit', { mode: 'inline', calls: 600, threshold: 200, inline: true, escape: true }).at(-1);
+  assert.deepEqual({ ...on.metrics }, { interpreted: 0, c1: 0, c2: 600, inlined: 2, escapes: 600 });
+  const off = simulate('jvm-jit', { mode: 'inline', calls: 600, threshold: 200, inline: false, escape: false }).at(-1);
+  assert.deepEqual({ ...off.metrics }, { interpreted: 0, c1: 0, c2: 600, inlined: 0, escapes: 0 });
+  assert.equal(on.dataLabel, 'INLINE + ESCAPE');
+});
+test('Flag comparison reruns the same workload with a lower compile threshold to expose interpreted work', () => {
+  const low = simulate('jvm-jit', { mode: 'flags', calls: 600, threshold: 200, inline: true, escape: true }).at(-1);
+  assert.deepEqual({ ...low.metrics }, { interpreted: 800, c1: 400, c2: 0, inlined: 0, escapes: 0 });
+  const high = simulate('jvm-jit', { mode: 'flags', calls: 600, threshold: 900, inline: true, escape: true }).at(-1);
+  assert.deepEqual({ ...high.metrics }, { interpreted: 1200, c1: 0, c2: 0, inlined: 0, escapes: 0 });
+  assert.equal(low.dataLabel, 'THRESHOLD COMPARE');
+});

@@ -2,6 +2,7 @@ import { LRUCache } from 'lru-cache';
 import { bisectRight } from 'd3-array';
 import { redisRunners } from './redisModels.js';
 import { jvmRunners } from './jvmModels.js';
+import { agentRunners } from './agentModels.js';
 
 export function javaHash(key) {
   let hash = 0;
@@ -1905,6 +1906,1621 @@ function esWrite(p) {
   }
   return frames;
 }
+function functionCalling(p) {
+  const scenario = p.scenario || 'single';
+  const sceneTag = { single: '① 单工具 · 一次往返', multi: '② 并行调用 · 校验重试', guard: '③ 护栏拦截 · 幻觉工具' }[scenario];
+  const frames = [];
+  const metrics = { rounds: 0, calls: 0, executed: 0, retries: 0, blocked: 0 };
+  const items = { calls: [], answer: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const ask = (name, short, full) => {
+    metrics.calls++;
+    const call = { name, short, full, st: 'ask', res: null };
+    items.calls.push(call);
+    return call;
+  };
+  emit('app', `Function Calling 教学模型就绪：场景「${sceneTag}」。已注册工具 get_weather(location, date)（返回 JSON）——模型不直连工具，只输出结构化调用请求，由应用校验后执行真实服务，结果回填后再生成终答。`, 0);
+  if (scenario === 'single') {
+    emit('user', '用户：「北京明天要带伞吗？」——请求携带工具定义，模型可以选择直接回答，也可以选择调用工具。', 1);
+    const c = ask('get_weather', '北京', 'get_weather { "location": "北京", "date": "2026-09-10" }');
+    metrics.rounds = 1;
+    emit('llm', `LLM 生成轮 1：模型没有编造答案，而是输出结构化 tool_calls——${c.full}，finish_reason=TOOL_CALLS。「要调工具」是程序可直接解析的信号，不是自然语言。`, 2);
+    emit('schema', 'JSON Schema 校验通过：location 非空、date 为合法 yyyy-MM-dd 且必填齐全 → 放行。校验不过的调用绝不会进入执行。', 4);
+    c.res = '晴 · 22°C · 无雨';
+    c.st = 'ok';
+    metrics.executed++;
+    emit('tool', '应用执行真实工具 get_weather → 200 { "condition": "晴", "temp": "22°C", "precip": "无雨" }——执行者是应用，模型全程不直连外部服务。', 5);
+    emit('app', '工具结果以 role=tool 消息回填对话：模型下一轮生成能读到这份真实返回。', 6);
+    metrics.rounds = 2;
+    items.answer = '北京明天晴、22°C、无雨——不用带伞。';
+    emit('llm', `LLM 生成轮 2：finish_reason=STOP——模型不再请求工具，基于回填的真实数据组织终答：「${items.answer}」工具调用循环结束。终答里的数字来自工具返回，不是模型编造。`, 7);
+  } else if (scenario === 'multi') {
+    emit('user', '用户：「北京和上海明天分别多少度？都适合晨跑吗？」——一个问题可能需要多个工具结果，模型可以并行输出多个 tool_calls。', 1);
+    const c1 = ask('get_weather', '北京', 'get_weather { "location": "北京", "date": "2026-09-10" }');
+    const c2 = ask('get_weather', '上海 · date=「明天」', 'get_weather { "location": "上海", "date": "明天" }');
+    metrics.rounds = 1;
+    emit('llm', 'LLM 生成轮 1：并行输出两个 tool_calls（同一轮生成，分别携带独立参数对象）——北京带合法日期，上海却把 date 写成了「明天」。', 2);
+    c1.res = '晴 · 22°C';
+    c1.st = 'ok';
+    c2.st = 'bad';
+    metrics.executed++;
+    metrics.retries++;
+    emit('schema', 'Schema 校验：北京通过；上海 date=「明天」不是 yyyy-MM-dd 格式 → 拒绝执行（重试 1）。失败不崩溃、不跳过——把错误结果回填给模型自纠。', 4);
+    emit('tool', '北京执行成功：get_weather → 200 { "condition": "晴", "temp": "22°C" }。', 5);
+    emit('app', '回填两条消息：北京 role=tool 真实结果 + 上海 role=tool 错误信息（date 格式非法，需修正为 yyyy-MM-dd）。', 6);
+    const c3 = ask('get_weather', '上海 · 2026-09-10', 'get_weather { "location": "上海", "date": "2026-09-10" }');
+    metrics.rounds = 2;
+    emit('llm', 'LLM 生成轮 2：读到错误回填后自纠——重新输出上海的 tool_calls，date 已修正为 2026-09-10。', 2);
+    emit('schema', 'Schema 校验通过：上海 date 已修正 → 放行。', 4);
+    c3.res = '多云 · 26°C';
+    c3.st = 'ok';
+    metrics.executed++;
+    emit('tool', '上海执行成功：get_weather → 200 { "condition": "多云", "temp": "26°C" }。', 5);
+    emit('app', '上海结果以 role=tool 回填——两城数据齐了。', 6);
+    metrics.rounds = 3;
+    items.answer = '北京明天晴 22°C、上海多云 26°C——两地都适合晨跑，跑完记得补水。';
+    emit('llm', `LLM 生成轮 3：finish_reason=STOP，基于两城真实返回终答：「${items.answer}」。期间经历了 1 次校验拒绝与模型自纠——护栏不是「挡住用户」，而是给模型一个修正的机会。`, 7);
+  } else {
+    emit('user', '用户连环追问三城天气，最后追加一句「顺便看下湿度」——任务本身没问题，但湿度不在已注册工具的能力内。', 1);
+    const asks = [
+      ask('get_weather', '北京', 'get_weather { "location": "北京", "date": "2026-09-10" }'),
+      ask('get_weather', '上海', 'get_weather { "location": "上海", "date": "2026-09-10" }'),
+      ask('get_weather', '广州', 'get_weather { "location": "广州", "date": "2026-09-10" }'),
+    ];
+    const res = ['晴 · 22°C', '多云 · 26°C', '阵雨 · 29°C'];
+    for (let i = 0; i < 3; i++) {
+      metrics.rounds = i + 1;
+      emit('llm', `LLM 生成轮 ${i + 1}：输出 tool_calls get_weather{${['北京', '上海', '广州'][i]}, 2026-09-10}。`, 2);
+      emit('schema', 'Schema 校验通过 → 放行执行。', 4);
+      asks[i].res = res[i];
+      asks[i].st = 'ok';
+      metrics.executed++;
+      emit('tool', `${['北京', '上海', '广州'][i]}执行成功：get_weather → 200 { "condition": "${res[i].split(' · ')[0]}", "temp": "${res[i].split(' · ')[1]}" }。`, 5);
+      emit('app', '结果 role=tool 回填，模型带着新数据进入下一轮。', 6);
+    }
+    const h = ask('forecast_humidity', '', 'forecast_humidity { "location": "北京" }');
+    metrics.rounds = 4;
+    h.st = 'block';
+    metrics.blocked++;
+    emit('llm', 'LLM 生成轮 4：模型幻觉出工具 forecast_humidity——白名单里根本没有这个名字（可能来自提示注入或训练幻觉）。', 2);
+    emit('schema', '白名单拦截（护栏）：工具名不在可用列表 → 不执行，回填 Unknown tool 错误，让模型收敛到已注册能力。', 8);
+    emit('app', 'Unknown tool 错误回填：模型被告知「没有这个工具」，而不是得到一次伪造的数据。', 6);
+    metrics.rounds = 5;
+    items.answer = '可用工具只支持温度与降水查询，暂无湿度数据接口——可以查其他城市的温度与降水。';
+    emit('llm', `LLM 生成轮 5：模型接受能力边界，基于三城真实数据终答：「${items.answer}」——没有湿度数据就如实说没有，不编造数字。5 轮 < max_iterations=8 兜底上限，循环有界且正常收敛。`, 7);
+  }
+  emit('app', `运行结束：生成轮 ${metrics.rounds} · 工具调用 ${metrics.calls} · 执行成功 ${metrics.executed} · 校验重试 ${metrics.retries} · 护栏拦截 ${metrics.blocked}——大模型从「会说话」到「能做事」的闭环：请求工具、应用执行、结果回填、基于事实作答。`, 8);
+  return frames;
+}
+function threadlocalLeak(p) {
+  const scenario = p.scenario || 'request';
+  const sceneTag = { request: '① 请求线程 · 每线程一份副本', 'pool-leak': '② 线程复用 · 脏读与 value 泄漏', 'pool-remove': '③ 治理方案 · remove() 斩断引用' }[scenario];
+  const frames = [];
+  const metrics = { requests: 0, reads: 0, dirty: 0, leaks: 0, removes: 0 };
+  const items = { threads: [], heap: [], removed: false };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const row = id => items.threads.find(t => t.id === id);
+  emit('tl', `ThreadLocal 教学模型就绪：场景「${sceneTag}」。set/get 读写的是「当前线程」自己的 ThreadLocalMap：key 是 ThreadLocal 实例（弱引用），value 是存入对象（强引用）——只有线程销毁或 remove() 能斩断引用链。`, 0);
+  if (scenario === 'request') {
+    metrics.requests++;
+    emit('req', 'req#1 到达：应用为它新建请求线程 T1（教学简化：每请求一线程，请求结束即销毁）。', 0);
+    items.threads.push({ id: 'req#1', w: 'T1', ctx: '—', st: 'run' });
+    emit('tl', 'req#1 业务代码 CTX.set(U1)：把用户上下文 U1 存入 T1 自己的 ThreadLocalMap——key 是 CTX 实例，value 是 U1。', 1);
+    row('req#1').ctx = 'U1';
+    emit('map', 'T1 的 ThreadLocalMap 出现 entry：[CTX → U1]。这份数据只挂在 T1 上——其他线程各自处理别的请求，get 不到 U1，互不可见。', 5);
+    emit('tl', 'req#1 处理中读上下文：CTX.get() → U1（读取 1）——同线程存取命中本线程 entry，无需层层传参。', 2);
+    metrics.reads++;
+    emit('req', 'req#1 处理完成，请求线程 T1 销毁——整张 ThreadLocalMap 作为线程对象的一部分一起被 GC，CTX→U1 随线程消失：无残留、无泄漏。', 7);
+    row('req#1').st = 'done'; row('req#1').ctx = '—';
+    metrics.requests++;
+    emit('req', 'req#2 到达：新建线程 T2 处理，与已销毁的 T1 毫无关系。', 0);
+    items.threads.push({ id: 'req#2', w: 'T2', ctx: '—', st: 'run' });
+    emit('tl', 'req#2 调 CTX.set(U2)：写入 T2 自己的 ThreadLocalMap——两个请求各存各的，互不覆盖。', 1);
+    row('req#2').ctx = 'U2';
+    emit('map', 'T2 的 ThreadLocalMap：[CTX → U2]；T1 的 Map 已随线程销毁。每线程一份副本，这正是「线程私有」的字面意思。', 5);
+    emit('tl', 'req#2 CTX.get() → U2（读取 2）——如果它去 get U1 会返回 null，因为 U1 在另一张已销毁的 Map 里。', 2);
+    metrics.reads++;
+    emit('req', 'req#2 完成，T2 销毁——两张 Map 都只存在于各自线程的生命周期内。', 7);
+    row('req#2').st = 'done'; row('req#2').ctx = '—';
+    emit('tl', `运行结束：请求 ${metrics.requests} · 读取 ${metrics.reads} · 脏读 ${metrics.dirty} · 泄漏 ${metrics.leaks} · 清理 ${metrics.removes}——线程不存活，Map 不残留：独立线程本身就是 ThreadLocal 最彻底的「清理」。`, 0);
+  } else if (scenario === 'pool-leak') {
+    metrics.requests++;
+    emit('req', 'req#1 到达：线程池分配 worker W1 处理（关键差异：W1 处理完不被销毁，而是空闲待命，等待下一个请求）。', 3);
+    items.threads.push({ id: 'req#1', w: 'W1', ctx: '—', st: 'run' });
+    emit('tl', 'req#1 调 CTX.set(U1)：entry 写入 W1 的 ThreadLocalMap。', 1);
+    row('req#1').ctx = 'U1';
+    emit('map', 'W1 的 ThreadLocalMap：[CTX → U1]——此刻一切正常，与独立线程场景无异。', 5);
+    emit('tl', 'req#1 处理中 CTX.get() → U1（读取 1）。', 2);
+    metrics.reads++;
+    emit('req', 'req#1 处理完成——但 W1 不销毁：请求代码漏写了清理（没有 finally remove），CTX→U1 原样留在 W1 的 ThreadLocalMap 里。', 3);
+    row('req#1').st = 'residue';
+    emit('entry', '随后请求上下文对象出栈：ThreadLocal 实例失去全部强引用——Entry 的 key 是弱引用，GC 一来就把 key 置 null：悬空 entry 诞生（key 已死，entry 还在）。', 5);
+    metrics.leaks++;
+    items.heap.push('U1');
+    emit('heap', '悬空 entry 的 value 仍是强引用：W1 活着、entry 不移除 → U1 永远占着堆（泄漏 1）。GC 帮不上忙——它只能回收弱 key，动不了强 value。', 6);
+    metrics.requests++;
+    emit('req', 'req#2 到达：还是 W1 处理。', 3);
+    items.threads.push({ id: 'req#2', w: 'W1', ctx: '—', st: 'run' });
+    emit('tl', 'req#2 业务代码直接 CTX.get()——本请求没 set 过，正常应返回 null（未登录），却命中 req#1 残留的 U1 → 脏读（脏读 1 · 读取 2）。', 2);
+    metrics.reads++;
+    metrics.dirty++;
+    row('req#2').ctx = 'U1'; row('req#2').st = 'dirty';
+    emit('heap', '堆侧：U1 仍被 W1 的悬空 entry 强引用，无法回收——脏读与泄漏是同一个根因：entry 没被移除。', 6);
+    emit('tl', `运行结束：请求 ${metrics.requests} · 读取 ${metrics.reads} · 脏读 ${metrics.dirty} · 泄漏 ${metrics.leaks} · 清理 ${metrics.removes}——复用的 W1 不清除：req#2 读到 req#1 的上下文（脏读），req#1 的 value 悬空滞留（泄漏）。`, 0);
+  } else {
+    metrics.requests++;
+    emit('req', '治理版：req#1 到达，线程池分配 worker W1。', 3);
+    items.threads.push({ id: 'req#1', w: 'W1', ctx: '—', st: 'run' });
+    emit('tl', 'req#1 调 CTX.set(U1)：写入 W1 的 ThreadLocalMap。', 1);
+    row('req#1').ctx = 'U1';
+    emit('map', 'W1 的 ThreadLocalMap：[CTX → U1]——重点看请求结束时的 finally。', 5);
+    emit('tl', 'req#1 处理中 CTX.get() → U1（读取 1）。', 2);
+    metrics.reads++;
+    emit('tl', 'req#1 结束，finally 块执行 CTX.remove()（清理 1）：当前线程的 entry 整条移除——key、value、Entry 对象一起消失，value 的引用链被斩断。', 4);
+    row('req#1').ctx = '—'; row('req#1').st = 'done';
+    metrics.removes++;
+    items.removed = true;
+    emit('entry', '引用链对比：remove() 前 value ← entry ← ThreadLocalMap ← 线程（引用链完整，value 无法回收）；remove() 后 U1 失去全部引用，随时可被 GC——不必等 W1 销毁。', 4);
+    metrics.requests++;
+    emit('req', 'req#2 到达：同一 worker W1 处理。', 3);
+    items.threads.push({ id: 'req#2', w: 'W1', ctx: '—', st: 'run' });
+    emit('tl', 'req#2 CTX.get() → null（未登录）——上一请求的 U1 已被 remove 清掉，读不到任何残留（读取 2 · 脏读 0）。', 2);
+    metrics.reads++;
+    row('req#2').st = 'done';
+    emit('heap', '堆侧全程无滞留：治理版的每次请求边界都干干净净。', 7);
+    emit('tl', `运行结束：请求 ${metrics.requests} · 读取 ${metrics.reads} · 脏读 ${metrics.dirty} · 泄漏 ${metrics.leaks} · 清理 ${metrics.removes}——同样的线程复用，remove() 让存取边界清晰：拿到的只可能是本请求 set 的值，或 null。`, 0);
+  }
+  return frames;
+}
+function blockingQueue(p) {
+  const scenario = p.scenario || 'abq';
+  const sceneTag = { abq: '① 有界阻塞 · put/take 与唤醒', lbq: '② 双锁拆分 · 入队出队不互斥', backpressure: '③ 背压传递 · 慢消费反制' }[scenario];
+  const frames = [];
+  const metrics = { puts: 0, takes: 0, blocks: 0, wakes: 0, peak: 0 };
+  const items = { q: [], waiting: [], prod: null, cons: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const cap = scenario === 'backpressure' ? 2 : 3;
+  const sync = () => { if (items.q.length > metrics.peak) metrics.peak = items.q.length; };
+  const put = (m, note) => {
+    metrics.puts++;
+    items.q.push(m);
+    sync();
+    items.prod = { txt: `P · ${m} 入队`, st: 'ok' };
+    emit('ring', `put ${m} 成功（尝试 ${metrics.puts}）：队列 [${items.q.join(' ')}]（${items.q.length}/${cap}）——${note}（put 成功会 signal notEmpty，唤醒在等 take 的消费者）。`, 1);
+  };
+  const blockedPut = (m, note) => {
+    metrics.puts++;
+    metrics.blocks++;
+    items.waiting.push(m);
+    items.prod = { txt: `P · put ${m} · 阻塞`, st: 'block' };
+    emit('lock', `队满（${items.q.length}/${cap}）→ put ${m} 阻塞在 notFull 条件上（尝试 ${metrics.puts} · 阻塞 ${metrics.blocks}）——${note}。${m} 没有入队，线程挂起让出 CPU，等消费者 take 后的 signal 唤醒。`, 1);
+  };
+  const take = (m, note) => {
+    items.q.shift();
+    metrics.takes++;
+    items.cons = { txt: `C · take ${m}`, st: 'run' };
+    emit('cons', `take 出队 ${m}（消费 ${metrics.takes}）→ 空位 +1——${note}。`, 2);
+  };
+  const wakePut = () => {
+    const m = items.waiting.shift();
+    items.q.push(m);
+    metrics.wakes++;
+    sync();
+    items.prod = { txt: `P · ${m} 被唤醒补入`, st: 'ok' };
+    emit('ring', `take 的 signal notFull 唤醒阻塞中的生产者 → ${m} 补入（唤醒 ${metrics.wakes}）：队列 [${items.q.join(' ')}]——唤醒是成对的：put 成功 signal notEmpty，take 成功 signal notFull。`, 3);
+  };
+  emit('ring', `阻塞队列教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'abq') {
+    emit('ring', `ArrayBlockingQueue 容量 ${cap}（环状数组）：put 队满 → 阻塞在 notFull 条件；take 队空 → 阻塞在 notEmpty 条件。生产者连发 5 条、消费者稍后跟进——看第 4、5 次 put 怎么被「卡」住又怎么被「唤醒」。`, 0);
+    emit('prod', '生产者启动：开始连发 5 条消息。', 0);
+    put('m1', '容量未满，直接入队');
+    put('m2', '直接入队');
+    put('m3', '队列满 3/3——环状数组容量到顶，再写必须等空位');
+    blockedPut('m4', '环状数组已满，没有空位可写');
+    emit('cons', '消费者姗姗来迟，开始逐条 take。', 2);
+    take('m1', '队列 [m2 m3]，腾出一个空位');
+    wakePut();
+    blockedPut('m5', '消费者消化得不够快，队又满了');
+    take('m2', '又腾出一个空位');
+    wakePut();
+    take('m3', '队列 [m4 m5]，继续消化');
+    take('m4', '队列 [m5]');
+    take('m5', '队列回到空——5 条消息全部被消费');
+    emit('stats', `运行结束：put 尝试 ${metrics.puts} · take 成功 ${metrics.takes} · 阻塞 ${metrics.blocks} · 唤醒 ${metrics.wakes} · 峰值积压 ${metrics.peak}——第 4、5 次 put 都因队满阻塞在 notFull，各被一次 take 的 signal 唤醒后补入：没有忙等、没有丢失，队列容量就是生产者的「红绿灯」。`, 0);
+  } else if (scenario === 'lbq') {
+    emit('ring', `LinkedBlockingQueue 容量 ${cap}（链表）：putLock 只护尾指针、takeLock 只护头指针——入队与出队持不同锁，可以真正并行。代价：count 需要 AtomicInteger 单独维护。`, 0);
+    emit('prod', '生产者与消费者同时开工：看双锁下入队、出队如何互不排队。', 0);
+    put('m1', '生产者持 putLock 入队');
+    put('m2', 'P 持 putLock 连发（只碰尾指针）');
+    take('m1', 'C 持 takeLock 出队（只碰头指针）——put 与 take 各护一端：若在单锁的 ArrayBlockingQueue 里，这两类操作要互相排队');
+    put('m3', 'P 继续入队，与 C 的出队互不干扰');
+    take('m2', 'C 追着消化');
+    put('m4', 'P 入队与 C 出队可以发生在同一时刻');
+    take('m3', 'C 继续 take，P 无需等待 C');
+    put('m5', 'P 完成全部 5 次入队——全程没有一次在锁上等对方');
+    take('m4', '队列 [m5]');
+    take('m5', '队列清空');
+    emit('stats', `运行结束：put 尝试 ${metrics.puts} · take 成功 ${metrics.takes} · 阻塞 ${metrics.blocks} · 唤醒 ${metrics.wakes} · 峰值积压 ${metrics.peak}——双锁之下入队出队互不阻塞：生产与消费的并发度由「锁的粒度」决定，而不是队列容量。`, 0);
+  } else {
+    emit('ring', `容量 ${cap} 的有界队列 + 处理很慢的消费者：生产者高速连发 5 条——积压到顶后，看看「慢消费」的压力传到哪里。`, 0);
+    emit('prod', '消费者处理速度很慢（每 take 之间都要做长处理），生产者开始高速连发。', 0);
+    put('m1', '空位充足，秒入队');
+    put('m2', '队列满 2/2——积压已达容量上限');
+    blockedPut('m3', '消费者还在处理上一条，队列没有空位');
+    blockedPut('m4', '生产者没有停手，继续尝试——又一次阻塞');
+    blockedPut('m5', '三次 put 全被挡在门外：生产速率被队列硬生生钳制——背压：压力从慢消费一路反传回生产源头');
+    emit('cons', '消费者终于处理完一条，开始逐条 take。', 2);
+    take('m1', '空位 +1');
+    wakePut();
+    take('m2', '继续慢慢消化');
+    wakePut();
+    take('m3', '又腾出空位');
+    wakePut();
+    take('m4', '队列 [m5]');
+    take('m5', '队列清空');
+    emit('stats', `运行结束：put 尝试 ${metrics.puts} · take 成功 ${metrics.takes} · 阻塞 ${metrics.blocks} · 唤醒 ${metrics.wakes} · 峰值积压 ${metrics.peak}——5 条消息一条不少，但其中 3 次 put 是「被唤醒后才补入」：有界队列把消费速率原样传回生产端、形成背压闭环；换成无界队列不会阻塞——代价是洪峰全吞进内存。`, 0);
+  }
+  return frames;
+}
+function casAtomic(p) {
+  const scenario = p.scenario || 'spin';
+  const sceneTag = { spin: '① CAS 自旋 · 比较并交换', aba: '② ABA 复现 · 版本号拦截', adder: '③ LongAdder · 分段降竞争' }[scenario];
+  const frames = [];
+  const metrics = { ops: 0, ok: 0, spins: 0, detect: 0, spread: 0 };
+  const items = { slot: null, stamp: null, blocked: false, base: null, cells: [], sum: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  emit('cas', `CAS 教学模型就绪：场景「${sceneTag}」。计量口径：一次 compareAndSet 调用 +1 次尝试（含失败后重试的调用）。`, 0);
+  if (scenario === 'spin') {
+    items.slot = 0;
+    emit('thread', 'T1 开始自增：先读槽位当前值作为期望 → expect = 0（读与 CAS 之间，别人可能已经改过——这正是 CAS 要处理的不确定性）。', 0);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 1;
+    emit('cas', 'T1 compareAndSet(0, 1)：内存当前值仍 == 期望 0 → 写入成功（尝试 1 · 成功 1）。槽位 = 1——单变量更新无锁完成。', 1);
+    emit('thread', 'T2 也要自增：读槽位——但拿到的是它自己动作开始前的旧值 expect = 0（T1 的写入发生在 T2 读之后、CAS 之前）。', 0);
+    metrics.ops++;
+    metrics.spins++;
+    emit('cas', 'T2 compareAndSet(0, 1) 失败：内存当前值 1 ≠ 期望 0（尝试 2 · 自旋 1）。失败 ≠ 放弃：乐观并发把失败当作「期望过期」的信号。', 2);
+    emit('thread', 'T2 重读槽位 → expect = 1（自旋循环第二步：读新值再比）。', 0);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 2;
+    emit('cas', 'T2 compareAndSet(1, 2)：这次匹配 → 写入成功（尝试 3 · 成功 2）。槽位 = 2——两次自增全程没有互斥锁。', 1);
+    emit('stats', `运行结束：CAS 尝试 ${metrics.ops} · 成功提交 ${metrics.ok} · 自旋 ${metrics.spins} · ABA 拦截 ${metrics.detect}——自旋 = 失败 → 重读 → 再比 的循环：竞争越激烈空转越多，这是无锁的主要代价。`, 0);
+  } else if (scenario === 'aba') {
+    items.slot = 10;
+    emit('thread', '两幕对照：先用无版本戳的 AtomicInteger 演「值被改走又改回」，再换 AtomicStampedReference 重演同一剧本。槽位初始 10。', 0);
+    emit('thread', 'T2 出场：想把槽位改成 20 再改回 10——制造一段「无人察觉」的值往返。', 0);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 20;
+    emit('cas', 'T2：compareAndSet(10, 20) 成功（尝试 1 · 成功 1）——槽位改走：10 → 20。', 1);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 10;
+    emit('cas', 'T2：compareAndSet(20, 10) 成功（尝试 2 · 成功 2）——又改回：20 → 10。此刻值确实回到 10，但「10」已经被动过两次。', 1);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 30;
+    emit('cas', 'T1 姗姗来迟：compareAndSet(10, 30)——无戳版直接通过（尝试 3 · 成功 3）！期望与当前值都是 10，CAS 只比数值：值相同就放行。T1 无从得知中间被改走又改回——ABA 的表象欺骗。', 3);
+    items.slot = 10;
+    items.stamp = 0;
+    emit('stamp', '换成 AtomicStampedReference：槽位 10 + 版本戳 stamp 0——此后每次写都要同步更新戳，值与戳都匹配才算数。重演同一剧本：', 4);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 20;
+    items.stamp = 1;
+    emit('cas', 'T2：stamped CAS(10→20, stamp 0→1) 成功（尝试 4 · 成功 4）：值变 20，戳推到 1——修改留下了痕迹。', 5);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 10;
+    items.stamp = 2;
+    emit('cas', 'T2：stamped CAS(20→10, stamp 1→2) 成功（尝试 5 · 成功 5）：值虽回到 10，戳已到 2——数值还原了，版本没还原。', 5);
+    metrics.ops++;
+    metrics.detect++;
+    items.blocked = true;
+    emit('stamp', 'T1：stamped CAS(10→30, 期望 stamp 0)——值 10 匹配，但当前戳 2 ≠ 期望 0 → 拒绝写入（尝试 6 · ABA 拦截 1）：版本戳记住了「中间被动过」。', 6);
+    items.blocked = false;
+    emit('thread', 'T1 重读当前状态 → 期望 (10, stamp 2)，换新戳重试。', 0);
+    metrics.ops++;
+    metrics.ok++;
+    items.slot = 30;
+    items.stamp = 3;
+    emit('cas', 'T1：stamped CAS(10→30, stamp 2→3) 成功（尝试 7 · 成功 6）：值 30、戳 3——被拦截后重试才通过。', 5);
+    emit('stats', `运行结束：CAS 尝试 ${metrics.ops} · 成功提交 ${metrics.ok} · 自旋 ${metrics.spins} · ABA 拦截 ${metrics.detect}——无戳版 3 次调用全部通过（最后一次是表象欺骗）；加戳后同剧本的值往返在第 7 次调用被拦下。值相同 ≠ 没被动过：版本戳把「历史」变成可比较的状态。`, 0);
+  } else {
+    items.base = 0;
+    emit('cells', '8 个线程并发 +1。低竞争时都直写 base（一个共享计数）；一旦 base 上 CAS 撞车，不原地死磕，把增量写进自己的 Cell[] 槽位；sum() = base + Σcells。', 7);
+    emit('thread', 'T1~T3 率先到达并直写 base；T4~T8 同时读到 base=3，将撞车分流。', 7);
+    metrics.ops++;
+    metrics.ok++;
+    items.base = 1;
+    emit('cas', 'T1：CAS(base 0→1) 直写成功（尝试 1 · 成功 1）——低竞争，base 上一步到位。', 7);
+    metrics.ops++;
+    metrics.ok++;
+    items.base = 2;
+    emit('cas', 'T2：CAS(base 1→2) 成功（尝试 2 · 成功 2）。', 7);
+    metrics.ops++;
+    metrics.ok++;
+    items.base = 3;
+    emit('cas', 'T3：CAS(base 2→3) 成功（尝试 3 · 成功 3）——base = 3。', 7);
+    const divert = (t, cell) => {
+      metrics.ops++;
+      emit('cas', `${t}：base CAS 撞车（尝试 ${metrics.ops}，未成功——多线程同时读到 base=3）→ 不再自旋死磕，把增量转写自己的 Cell[${cell}]。`, 7);
+      metrics.ops++;
+      metrics.ok++;
+      metrics.spread++;
+      const c = items.cells.find(x => x.i === cell);
+      if (c) c.n++;
+      else items.cells.push({ i: cell, n: 1 });
+      emit('cells', `${t}：Cell[${cell}] CAS +1 成功（尝试 ${metrics.ops} · 成功 ${metrics.ok} · 分流 ${metrics.spread}）——写竞争从全网争一个数，摊成每槽少数线程。`, 7);
+    };
+    divert('T4', 0);
+    divert('T5', 1);
+    divert('T6', 0);
+    divert('T7', 2);
+    divert('T8', 1);
+    items.sum = 8;
+    emit('cells', `sum() = base + Σcells = ${items.base} + ${items.cells.map(c => c.n).join(' + ')} = ${items.sum}——与 8 个线程的总提交一致。sum 是弱一致快照（累加瞬间的并发写入可能缺席），教学脚本按最终态求和。`, 7);
+    emit('stats', `运行结束：CAS 尝试 ${metrics.ops} · 成功提交 ${metrics.ok} · 自旋 ${metrics.spins} · 分流 ${metrics.spread}——5 个撞车线程全部转向自己的 Cell，base 只被 3 个线程直写：热点从「一个数」摊成「base + 3 个 Cell」，写吞吐不随竞争塌陷。`, 0);
+  }
+  return frames;
+}
+function completableFuture(p) {
+  const scenario = p.scenario || 'chain';
+  const sceneTag = { chain: '① 链式组装 · 串行与并行', error: '② 异常传播 · exceptionally 兜底', pool: '③ 线程池隔离 · 阻塞传染' }[scenario];
+  const frames = [];
+  const metrics = { stages: 0, steps: 0, errors: 0, fallbacks: 0, skipped: 0, queued: 0 };
+  const items = { phase: null, jobs: [], value: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const requeue = () => { metrics.queued = items.jobs.filter(j => j.st === 'wait').length; };
+  const add = (id, st, activeNode, msg, code) => {
+    items.jobs.push({ id, st });
+    metrics.stages++;
+    requeue();
+    emit(activeNode, msg, code);
+  };
+  const finish = (ids, msg) => {
+    ids.forEach(id => { items.jobs.find(j => j.id === id).st = 'done'; });
+    requeue();
+    emit('cf', msg, 0);
+  };
+  emit('deps', `CompletableFuture 教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'chain') {
+    emit('deps', '六节点依赖图：A/C/D 互不依赖（层 1 并行）；B = A.thenApply、E = C.thenCombine(D)（层 2）；F = B.thenCombine(E) 收尾（层 3）。若全部串行要 6 层——看编排如何把墙钟压到 3 层。', 0);
+    items.phase = { txt: '① 并行扇出 · 依赖图', st: 'run' };
+    add('A', 'run', 'task', '提交任务 A：supplyAsync 立即开工。', 0);
+    add('C', 'run', 'task', '提交任务 C：与 A 互不依赖，同一时钟步内并行执行。', 0);
+    add('D', 'run', 'task', '提交任务 D：A、C、D 三个 future 同时开跑。', 0);
+    emit('pool', 'A/C/D 在 commonPool 的工作线程上并行执行——串行要 3 层的事，并行 1 层完成。', 6);
+    finish(['A', 'C', 'D'], 'A、C、D 同时完成——层 1 结束。');
+    metrics.steps = 1;
+    emit('deps', '层 1 完成（时钟 1）：A、C、D 的结果同时就绪——3 个节点只花 1 个时钟步。', 6);
+    add('B', 'run', 'deps', 'B = A.thenApply(...)：依赖 A 的结果，串行接续。', 1);
+    add('E', 'run', 'deps', 'E = C.thenCombine(D)：等 C、D 都完成再汇合——扇出之后的汇合点。', 2);
+    emit('pool', 'B 与 E 同属层 2：两个回调并行执行，互不等待。', 6);
+    finish(['B', 'E'], 'B、E 完成——层 2 结束。');
+    metrics.steps = 2;
+    emit('deps', '层 2 完成（时钟 2）：B 拿到 A 的产物继续加工；E 把 C、D 合并——两个层 2 节点也在同一时钟步内并行完成。', 6);
+    add('F', 'run', 'deps', 'F = B.thenCombine(E)：两条支路的结果在终点汇合。', 2);
+    finish(['F'], 'F 完成——全链出终值。');
+    metrics.steps = 3;
+    items.value = { t: 'F ✓ 全链终值' };
+    emit('result', '层 3 完成（时钟 3）：F 汇合 B、E 出终值——6 个节点、3 个时钟步。', 3);
+    emit('stats', `运行结束：节点 ${metrics.stages} · 时钟 ${metrics.steps} 层（串行对照 6 层）· 异常 0 · 兜底 0 · 跳过 0——依赖图决定墙钟：能并行的绝不成串。收益来自「谁依赖谁」的声明式描述，而不是手写线程协调。`, 0);
+  } else if (scenario === 'error') {
+    emit('deps', '链 A→B→C→D（thenApply 串行接续），B 抛异常：看异常如何沿链传播、下游回调如何被跳过、链尾 exceptionally 如何接管。', 0);
+    items.phase = { txt: '② 异常链 · exceptionally 兜底', st: 'warn' };
+    add('A', 'run', 'task', 'A 提交执行。', 0);
+    finish(['A'], 'A 成功。');
+    metrics.steps = 1;
+    emit('deps', 'A 成功（时钟 1）——链条正常起步。', 6);
+    add('B', 'run', 'deps', 'B = A.thenApply(...)：接续 A 的结果开始执行。', 1);
+    metrics.steps = 2;
+    metrics.errors++;
+    items.jobs.find(j => j.id === 'B').st = 'error';
+    emit('cf', 'B 执行中抛出异常（时钟 2 · 异常 1）——B 以异常完结：这个 future 携带的是异常，不是值。', 5);
+    metrics.skipped++;
+    add('C', 'skip', 'deps', 'C 依赖 B 的结果：B 异常完结 → C 的回调体不会执行，直接继承异常（跳过 1）——传播规则：下游 stage 不执行，而不是拿到 null 继续跑。', 5);
+    emit('deps', 'C 跳过：它连执行的机会都没有，整个链以异常往下传。', 5);
+    metrics.skipped++;
+    add('D', 'skip', 'deps', 'D 依赖 C → 同样跳过（跳过 2）：下游整条链以异常完结。', 5);
+    items.value = { t: 'fallback · 兜底值' };
+    metrics.fallbacks++;
+    emit('result', '链尾 exceptionally 接住异常 → 返回兜底值（兜底 1）：异常链被截断、转回正常值——终值 = 兜底值，调用方 join 到的是结果而不是异常。', 4);
+    emit('stats', `运行结束：节点 ${metrics.stages} · 时钟 ${metrics.steps} 层 · 异常 ${metrics.errors} · 跳过 ${metrics.skipped} · 兜底 ${metrics.fallbacks}——B 之后没有一个回调体执行；没有 exceptionally 的链会把异常抛给调用方。传播 ≠ 吞掉，只有异常入口（exceptionally/handle）能截住。`, 0);
+  } else {
+    emit('pool', '两幕对照，同一批任务（2 个阻塞型 B + 4 个计算型 C）：先全混进一个 2 线程池，再改成隔离池重演。commonPool 线程数 ≈ CPU−1：阻塞任务占一个，就少一个可算的线程。', 6);
+    items.phase = { txt: '幕 1 · 混池（2 线程）', st: 'warn' };
+    add('B1', 'run', 'task', 'B1 提交（阻塞型：模拟 RPC 长调用，线程睡着等响应）→ 占住线程 1。', 0);
+    add('B2', 'run', 'task', 'B2 提交 → 占住线程 2。池已满：两个稀缺线程被「睡着的任务」长期占用。', 0);
+    add('C1', 'wait', 'pool', 'C1 提交（计算型）→ 两个线程都被占 → 排队（排队 1）——它等的不是计算量，是线程。', 6);
+    add('C2', 'wait', 'pool', 'C2 提交 → 继续排队（排队 2）。', 6);
+    add('C3', 'wait', 'pool', 'C3 提交 → 排队（排队 3）。', 6);
+    add('C4', 'wait', 'pool', 'C4 提交 → 排队（排队 4）：4 个计算任务全部被 2 个阻塞任务挡在门外——阻塞传染：一个 RPC 调用 ≈ 少一个 CPU 线程。', 6);
+    items.jobs.find(j => j.id === 'B1').st = 'done';
+    items.jobs.find(j => j.id === 'C1').st = 'run';
+    requeue();
+    metrics.steps = 1;
+    emit('pool', 'B1 的 RPC 返回（时钟 1 结束）→ 释放线程 1，C1 入池开跑（排队 3）——计算任务被阻塞任务拖着走。', 6);
+    items.jobs.find(j => j.id === 'B2').st = 'done';
+    items.jobs.find(j => j.id === 'C2').st = 'run';
+    requeue();
+    emit('pool', 'B2 返回 → C2 入池（排队 2）：线程一格一格地释放，排队缓慢消化。', 6);
+    items.jobs.find(j => j.id === 'C1').st = 'done';
+    items.jobs.find(j => j.id === 'C2').st = 'done';
+    items.jobs.find(j => j.id === 'C3').st = 'run';
+    items.jobs.find(j => j.id === 'C4').st = 'run';
+    requeue();
+    metrics.steps = 2;
+    emit('pool', 'C1、C2 完成（时钟 2）→ C3、C4 入池（排队 0）——计算任务总算跑起来了。', 6);
+    items.jobs.find(j => j.id === 'C3').st = 'done';
+    items.jobs.find(j => j.id === 'C4').st = 'done';
+    requeue();
+    metrics.steps = 3;
+    emit('pool', 'C3、C4 完成（时钟 3）：混池墙钟 3 层——其中 1 层是等阻塞任务，计算全程被拖着。', 6);
+    items.jobs.length = 0;
+    items.phase = { txt: '幕 2 · 隔离池（两池并行）', st: 'ok' };
+    emit('pool', '改用隔离池重演同批任务：B1′、B2′ 提交到独立的阻塞任务池；C1′~C4′ 提交到 2 线程计算池——两类任务互不占道。', 7);
+    add('B1′', 'run', 'task', 'B1′ 在独立阻塞池开跑——不占计算线程。', 0);
+    add('B2′', 'run', 'task', 'B2′ 同池开跑，与计算池并行。', 0);
+    add('C1′', 'run', 'pool', 'C1′ 在计算池开跑。', 7);
+    add('C2′', 'run', 'pool', 'C2′ 同池开跑（两池并行推进）。', 7);
+    add('C3′', 'wait', 'pool', 'C3′ 按计算池容量排队（排队 1）——这是池内正常排队，不是被别人挡路。', 7);
+    add('C4′', 'wait', 'pool', 'C4′ 加入排队（排队 2）：阻塞任务 B′ 一直在自己的池里跑，谁也没挡谁。', 7);
+    items.jobs.find(j => j.id === 'C1′').st = 'done';
+    items.jobs.find(j => j.id === 'C2′').st = 'done';
+    items.jobs.find(j => j.id === 'C3′').st = 'run';
+    items.jobs.find(j => j.id === 'C4′').st = 'run';
+    requeue();
+    metrics.steps = 4;
+    emit('pool', 'C1′、C2′ 完成（时钟 4）→ C3′、C4′ 入池（排队 0）：期间 B′ 在独立池里并行跑完。', 7);
+    items.jobs.find(j => j.id === 'C3′').st = 'done';
+    items.jobs.find(j => j.id === 'C4′').st = 'done';
+    requeue();
+    metrics.steps = 5;
+    items.value = { t: '全部完成 · 隔离池墙钟 2 层' };
+    emit('result', 'C3′、C4′ 完成（时钟 5）：隔离池墙钟 2 层 vs 混池 3 层——同样的任务少花 1 层：阻塞与计算并行，谁也不用等谁。', 7);
+    emit('stats', `运行结束：节点累计 ${metrics.stages}（两幕各 6）· 演示时钟 ${metrics.steps} 层（混池 3 · 隔离 2）· 排队峰值 4 → 结束时 ${metrics.queued}——阻塞传染的解药不是更快的线程，而是按任务性质分池：把「会睡着的任务」与「要算的任务」隔离。`, 0);
+  }
+  return frames;
+}
+function mysqlSharding(p) {
+  const scenario = p.scenario || 'shard';
+  const sceneTag = { shard: '① 取模分片 · 路由到表', rehash: '② 扩容之痛 · rehash 全量搬', ring: '③ 一致性哈希 · 平滑迁移' }[scenario];
+  const frames = [];
+  const metrics = { writes: 0, locates: 0, broadcast: 0, total: 0, moves: 0, nodes: 0 };
+  const items = { mode: scenario, phase: null, tables: [], oldTables: [], ring: [], moved: [], last: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  emit('app', `分库分表教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'shard') {
+    for (let i = 0; i < 8; i++) items.tables.push({ i, keys: [] });
+    items.phase = { txt: '逐笔路由写入', st: 'run' };
+    emit('router', '物理布局：4 库 × 每库 2 表 = 8 张物理表 orders_0 ~ orders_7。槽位 = hash(order_id) % 8；槽 0-1 → db0、2-3 → db1、4-5 → db2、6-7 → db3。', 0);
+    for (let i = 1; i <= 8; i++) {
+      const slot = i % 8, db = Math.floor(slot / 2);
+      emit('key', `o${i}（order_id=${i}）→ ${i} % 8 = 槽 ${slot}：路由在写之前就算好落点，一条记录只会落到一张表。`, 0);
+      items.tables[slot].keys.push(`o${i}`);
+      metrics.writes++;
+      metrics.total++;
+      items.last = { kind: 'write', text: `✓ o${i} → 槽 ${slot}` };
+      emit('dbs', `o${i} 写入 db${db}.orders_${slot}（路由写入 ${metrics.writes} / 数据 ${metrics.total}）——8 张表按哈希摊开，没有热点表。`, 1);
+    }
+    items.last = null;
+    items.phase = { txt: '带分片键查询 ×2', st: 'ok' };
+    emit('app', '两笔带分片键的查询（WHERE order_id = ?）：应用用同一公式反推槽位，只查那一张表——路由的精确性让单表定位成为可能。', 2);
+    emit('key', '查询 order_id=3 → 槽 3 → 只扫 db1.orders_3（单表命中 1）——其余 7 张表完全不碰。', 2);
+    metrics.locates++;
+    items.last = { kind: 'locate', text: '定位 order_id=3 · 槽 3' };
+    emit('dbs', '查询 order_id=7 → 槽 7 → 只扫 db3.orders_7（单表命中 2）。两次定位都只落在一张表上。', 2);
+    metrics.locates++;
+    items.last = { kind: 'locate', text: '定位 order_id=7 · 槽 7' };
+    items.last = null;
+    items.phase = { txt: '无分片键查询 ×1', st: 'warn' };
+    emit('app', '一笔无分片键的查询（WHERE user_id = 9）：user_id 不参与路由——应用不知道数据在哪个槽，广播是唯一的答案。', 3);
+    metrics.broadcast++;
+    items.last = { kind: 'broadcast', text: '广播 · orders_0~orders_7 全扫' };
+    emit('dbs', '广播查询（广播 1）：orders_0 ~ orders_7 全扫再归并——一次查询被放大成 8 份执行：连接、扫描、归并开销全部 ×表数。', 3);
+    emit('app', `运行结束：路由写入 ${metrics.writes} · 单表命中 ${metrics.locates} · 广播 ${metrics.broadcast}——路由精确性来自分片键：带它只查一张表，不带它就要付全部 8 张表的代价。`, 0);
+  } else if (scenario === 'rehash') {
+    const slots4 = [1, 2, 3, 0, 1, 2, 3, 0];
+    for (let i = 0; i < 4; i++) items.tables.push({ i, keys: [] });
+    items.phase = { txt: '现状 · 4 槽分布', st: 'run' };
+    emit('router', '现状：取模数 = 4，orders_0 ~ orders_3 四张表。8 笔历史订单 o1 ~ o8（order_id=1~8）按 %4 分布。', 4);
+    for (let i = 1; i <= 8; i++) {
+      items.tables[slots4[i - 1]].keys.push(`o${i}`);
+      metrics.total++;
+      emit('dbs', `o${i}（id=${i}）→ %4 = 槽 ${slots4[i - 1]} → orders_${slots4[i - 1]}（数据 ${metrics.total}/8）。`, 1);
+    }
+    items.phase = { txt: '旧表作废', st: 'warn' };
+    items.tables.forEach(t => { t.retired = true; });
+    items.last = { kind: 'retire', text: '4 张旧表整体作废' };
+    emit('mig', '扩容：4 槽 → 8 槽，取模数 4 → 8。对取模分片这不是「加一张表」——每行数据的新槽位都要按 %8 重算，4 张旧表整体作废。', 4);
+    emit('mig', '迁移窗口新老路由并存：要么应用双写、要么停写——数据量越大窗口越长，这是取模扩容最痛的代价。', 5);
+    items.oldTables = items.tables;
+    items.tables = [];
+    for (let i = 0; i < 8; i++) items.tables.push({ i, keys: [] });
+    items.last = null;
+    items.phase = { txt: '按 %8 全量重放', st: 'run' };
+    for (let i = 1; i <= 8; i++) {
+      const to = i % 8;
+      items.tables[to].keys.push(`o${i}`);
+      metrics.writes++;
+      metrics.moves++;
+      items.last = { kind: 'replay', text: i === 4 ? 'o4：旧槽 0 → 新槽 4' : i === 8 ? 'o8：旧槽 0 → 新槽 0' : `o${i}：旧槽 ${slots4[i - 1]} → 新槽 ${to}` };
+      emit('dbs', `o${i} 按新模数重放：%4 旧槽 ${slots4[i - 1]} → %8 新槽 ${to}，写入重建后的 orders_${to}（搬移 ${metrics.moves}）——槽号看似没变的 o8 也进了物理上的新表：旧表整体作废，没有哪行能留在原地。`, 0);
+    }
+    emit('mig', `运行结束：数据 ${metrics.total} · 搬移 ${metrics.moves}（100%）——取模扩容没有「只搬一部分」：模数变了，历史行全部重算重放。`, 0);
+  } else {
+    items.ring = [0, 4, 8, 12].map((pos, n) => ({ id: `N${n + 1}`, pos, keys: [], born: false }));
+    metrics.total = 16;
+    metrics.nodes = items.ring.length;
+    items.phase = { txt: '哈希环 · 4 节点均衡', st: 'run' };
+    emit('router', '哈希环就绪：环上 16 个位置（pos 0~15），节点 N1~N4 摆位 pos 0/4/8/12——key 哈希后沿环顺时针找第一个节点。o1~o16 的哈希 = id % 16，正好铺满全环。', 6);
+    for (let i = 1; i <= 16; i++) {
+      const kp = i % 16;
+      const own = [0, 4, 8, 12].find(np => np >= kp);
+      items.ring.find(n => n.pos === (own === undefined ? 0 : own)).keys.push(`o${i}`);
+    }
+    items.ring.forEach(node => emit('dbs', `${node.id}（pos ${node.pos}）← ${node.keys.join('、')}——4 个节点各管 4 个 key，均衡无热点。`, 6));
+    items.phase = { txt: '新节点 N5 加入', st: 'warn' };
+    emit('mig', '容量评估 → 增加一个分片：新节点哈希落在 pos 2（N1@0 与 N2@4 之间的弧段上）。一致性哈希的搬家规则：只有「顺时针遇到的第一个节点从此变成 N5」的那一小段弧上的 key 需要搬家——即 pos 1~2。', 7);
+    metrics.nodes++;
+    items.ring.push({ id: 'N5', pos: 2, keys: [], born: true });
+    const taken = [];
+    const n2 = items.ring.find(n => n.id === 'N2');
+    n2.keys = n2.keys.filter(k => {
+      const kp = Number(k.slice(1)) % 16;
+      if (kp === 1 || kp === 2) { taken.push(k); return false; }
+      return true;
+    });
+    taken.forEach(k => {
+      metrics.moves++;
+      items.moved.push({ k, from: 'N2', to: 'N5' });
+      items.last = { kind: 'move', text: `${k} 迁 N5` };
+      emit('mig', `${k}（pos ${Number(k.slice(1)) % 16}）：原归属 N2 → 逆时针区间内出现新节点 N5 → 归属切换（搬移 ${metrics.moves}）——它和同弧段的一小撮 key 是这次扩容的全部代价。`, 7);
+    });
+    items.ring.find(n => n.id === 'N5').keys = taken;
+    items.last = null;
+    emit('mig', '其余 14 个 key 的归属节点没有任何变化——一致性哈希把「扩容搬家」限制在新节点接管的一小段弧上。', 6);
+    items.phase = { txt: '平滑迁移完成', st: 'ok' };
+    emit('mig', `运行结束：环节点 ${metrics.nodes} · 数据 ${metrics.total} · 平滑搬移 ${metrics.moves}（12.5%）——同数据量若用取模从 4 槽扩到 5 槽，约一半 key 要重新落位；一致性哈希只动 2/16，迁移可以小步按需做。`, 0);
+  }
+  return frames;
+}
+function mysqlExplain(p) {
+  const scenario = p.scenario || 'plan';
+  const sceneTag = { plan: '① 读懂执行计划 · type/key/rows', fail: '② 索引失效 · 常见反模式', force: '③ 选错索引 · FORCE 纠正' }[scenario];
+  const frames = [];
+  const metrics = { plans: 0, const: 0, ref: 0, all: 0, failed: 0, degraded: 0, filesorts: 0, corrected: 0 };
+  const items = { mode: scenario, phase: null, plans: [], last: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const add = (sql, type, key, rows, st) => {
+    metrics.plans++;
+    if (type === 'const') metrics.const++;
+    else if (type === 'ref') metrics.ref++;
+    else if (type === 'ALL') metrics.all++;
+    items.plans.push({ n: metrics.plans, sql, type, key, rows, st });
+    return metrics.plans;
+  };
+  emit('opt', `EXPLAIN 教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'plan') {
+    items.phase = { txt: '三计划对比 · 1 万行表', st: 'run' };
+    emit('sql', 'orders 表 1 万行，索引：PRIMARY(id) · idx_user(user_id)。对三条 SQL 各 EXPLAIN 一次，读 type / key / rows 三列。', 0);
+    add('WHERE id = 42', 'const', 'PRIMARY', 1, 'ok');
+    emit('plan', '计划 1：WHERE id = 42 → type=const · key=PRIMARY · rows=1——主键等值一次定位，最廉价的访问路径（估算 1 行）。', 5);
+    emit('idx', 'const 的底气：PRIMARY 索引树按主键有序，等值查询沿树直落叶子——不需要扫任何别的东西。', 5);
+    add('WHERE user_id = 7', 'ref', 'idx_user', 12, 'ok');
+    emit('plan', '计划 2：WHERE user_id = 7 → type=ref · key=idx_user · rows=12——二级索引等值命中 12 行，比全表扫少三个数量级。', 5);
+    emit('exec', 'ref 路径：先在 idx_user 树里定位 12 个主键，再回表取 12 行——回表是二级索引的固定动作，胜在只回少数行。', 5);
+    add('WHERE status = 1', 'ALL', 'NULL', 10000, 'fail');
+    emit('plan', '计划 3：WHERE status = 1 → type=ALL · key=NULL · rows=10000——status 没有索引，只能全表逐行扫。', 2);
+    emit('exec', '估算量对比：1 vs 12 vs 10000——rows 不是精确值而是代价的度量：优化器的每一次取舍都写在这一列里。', 2);
+    emit('plan', `运行结束：计划 ${metrics.plans}（const ${metrics.const} · ref ${metrics.ref} · ALL ${metrics.all}）——type 决定访问方式等级，key 指明走的树，rows 标注估算代价：三列合起来就是一条 SQL 的命运。`, 0);
+  } else if (scenario === 'fail') {
+    items.phase = { txt: '三条反模式逐一 EXPLAIN', st: 'run' };
+    emit('sql', '三条「人眼看着没问题」的 SQL，对 idx_user（user_id）与复合索引 idx_area_user(area, user_id) 各制造一次失效。', 3);
+    emit('sql', '反模式 1：WHERE user_id + 1 = 8——为了查询把列包进了算术表达式。', 3);
+    add('WHERE user_id + 1 = 8', 'ALL', 'NULL', 10000, 'fail');
+    metrics.failed++;
+    emit('opt', '优化器想用 idx_user 却无从下手：索引树按「列值本身」有序，而比较对象是 user_id+1 的运算结果——树的无序性让定位失效 → type=ALL（失效 1）。', 6);
+    emit('exec', '失效的代价是 10000 行逐行算 user_id+1 再比对；正确写法是把运算挪到等号另一边：WHERE user_id = 7。', 6);
+    emit('sql', '反模式 2：WHERE phone = 13812340000——varchar 列与数字直接比大小。', 3);
+    add('WHERE phone = 13812340000', 'ALL', 'NULL', 10000, 'fail');
+    metrics.failed++;
+    emit('opt', 'phone 是 varchar 而条件给的是数字：比较前要隐式 CAST——索引树里存的是字符串，CAST 后的值与树序对不上 → 整列隐式转换，索引再次失效（失效 2）。', 6);
+    emit('exec', '两条反模式殊途同归：ALL + rows=10000。索引能否生效取决于「比较能否直接在树上定位」，任何绕过列值的写法都在杀死索引。', 6);
+    emit('sql', '反模式 3：复合索引 idx_area_user(area, user_id)，却只按 user_id 查。', 4);
+    add('WHERE user_id = 7 · 仅后列', 'index', 'idx_area_user', 10000, 'warn');
+    metrics.degraded++;
+    emit('opt', '复合索引先按前导列 area 排序：缺了前导列，无法按前缀定位——只能从树头到尾扫整棵索引树：type=index（退化 1）。', 4);
+    emit('idx', 'type=index ≠ 全表扫（ALL），但也远差于定位：它遍历整棵 B+ 树把 1 万行的 user_id 全读出来过滤——比全表扫少一次回表，仅此而已。', 4);
+    emit('plan', `运行结束：计划 ${metrics.plans}（索引失效 ${metrics.failed} · 退化全索引扫 ${metrics.degraded}）——失效的三个机理各不相同（包裹 / 转换 / 前导列缺失），下场却同样昂贵：type 每退一档，都要有可解释的原因。`, 0);
+  } else {
+    items.phase = { txt: '默认计划 · 带 filesort', st: 'warn' };
+    emit('sql', '慢 SQL：SELECT * FROM orders WHERE user_id IN (…) ORDER BY created_at DESC LIMIT 20——user_id 过滤强，但还要按 created_at 排序。', 6);
+    emit('opt', '优化器按统计信息估代价：走 idx_user 过滤到 400 行，但 ORDER BY created_at 与 idx_user 的树序无关 → 400 行要文件排序（filesort），代价不低。', 6);
+    add('user_id IN (…) ORDER BY created_at', 'ref', 'idx_user', 400, 'warn');
+    metrics.filesorts++;
+    emit('plan', '计划 1：type=ref · key=idx_user · rows=400 + filesort——纸面过滤最优，实际要额外排序（文件排序 1）。', 6);
+    emit('exec', 'filesort 的真相：MySQL 先把 400 行捞进 sort_buffer 排序再取前 20——数据量大时 spill 到磁盘，代价可能超过多扫几行索引。', 6);
+    items.phase = { txt: 'FORCE INDEX 纠正', st: 'ok' };
+    emit('sql', 'DBA 复查：created_at 上有 idx_created——按它顺序扫，ORDER BY 直接免排序，LIMIT 20 还能提前终止。', 7);
+    add('FORCE INDEX(idx_created) · 同 SQL', 'range', 'idx_created', 20, 'ok');
+    metrics.corrected++;
+    emit('plan', '计划 2：type=range · key=idx_created · rows=20 · 无 filesort——按 created_at 树序扫到 20 行即停（纠正后改善 1）。', 5);
+    emit('opt', '对比计划 1 与 2：idx_created 单看 rows 过滤更弱，但「免排序 + 提前终止」的总代价更低——FORCE INDEX 把统计信息可能算错的那笔账，用人的验证覆盖掉。', 5);
+    emit('plan', `运行结束：计划 ${metrics.plans}（文件排序 ${metrics.filesorts} · 纠正后改善 ${metrics.corrected}）——优化器选错不丢人，丢人的是不用 EXPLAIN 对比就迷信 FORCE。`, 0);
+  }
+  return frames;
+}
+function esQuery(p) {
+  const scenario = p.scenario || 'bm25';
+  const sceneTag = { bm25: '① BM25 打分 · 词频/稀有度/长度', query: '② 查询语义 · match/term/短语', rank: '③ 排序干预 · boost 与 function_score' }[scenario];
+  const frames = [];
+  const metrics = { docs: 0, scored: 0, hits: 0, saturated: 0, rare: 0, queries: 0, matchHits: 0, termHits: 0, phraseHits: 0, boosted: 0, rescored: 0 };
+  const items = { mode: scenario, phase: null, q: null, cur: [], chips: [], results: [], docs: [] };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  emit('score', `ES 查询与打分教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'bm25') {
+    items.phase = { txt: '语料就绪 · 查询 snow', st: 'run' };
+    metrics.docs = 4;
+    emit('query', '语料 4 篇：d1 长文（约 40 词）、d2 短文（8 词）、d3 短文（6 词）、d4 与 snow 无关。第一轮查询 match "snow"——BM25 对每篇文档逐词项打分。', 0);
+    metrics.queries++;
+    items.q = { t: 'match "snow"', st: 'ok' };
+    emit('analy', 'snow 在 d1/d2/d3 各命中不同次数，d4 无命中——看分数如何被词频、稀有度与文档长度三股力量掰开。', 1);
+    items.cur.push({ id: 'd1', t: 'd1 · 1.1', st: 'ok', title: 'd1 长文命中 snow×1：长度归一摊薄词频——40 词里出现 1 次，密度低，得分被压到 1.1' });
+    metrics.scored++;
+    metrics.hits++;
+    emit('score', 'd1（长文）命中 1 次 → 1.1 分：长度归一生效——同样命中一次，出现在长文里不如出现在短文里值钱（打分 1）。', 3);
+    items.cur.push({ id: 'd2', t: 'd2 · 1.8', st: 'ok', title: 'd2 短文命中 snow×1：短文词频密度高 → 1.8 > 长文的 1.1' });
+    metrics.scored++;
+    metrics.hits++;
+    emit('score', 'd2（短文）同命中 1 次 → 1.8 分：同样的 1 次命中，短文 > 长文——长度归一让短文档的同频命中更值钱（打分 2）。', 3);
+    items.cur.push({ id: 'd3', t: 'd3 · 2.4', st: 'ok', title: 'd3 命中 snow×3：词频饱和——3 次 = 2.4，远不到 1.8×3 = 5.4' });
+    metrics.scored++;
+    metrics.hits++;
+    metrics.saturated++;
+    items.chips.push({ t: '词频饱和：3 次 = 2.4 ≪ 3 倍单次分 5.4', st: 'warn' });
+    emit('score', 'd3 命中 3 次 → 2.4 分：词频饱和生效——堆 3 次词频只换来 1.3 倍的分数，远低于「1 次分 ×3 = 5.4」（打分 3 · 饱和 1）：防止堆词刷分的长文靠这个机制被压制。', 1);
+    items.cur.push({ id: 'd4', t: 'd4 · 0', st: 'bad', title: 'd4 不含 snow：无命中 0 分' });
+    metrics.scored++;
+    emit('score', 'd4 无 snow → 0 分（打分 4）。snow 查询汇总：打分 4 篇 · 命中 3 篇——排序：d3 2.4 > d2 1.8 > d1 1.1。', 2);
+    emit('fields', 'query 1 完成：命中 {d1, d2, d3}。但 BM25 还有第三股力量没登场——稀有度。', 2);
+    items.phase = { txt: '稀有词对照 · zebra', st: 'run' };
+    metrics.queries++;
+    items.q = { t: 'match "zebra" · 稀有词对照', st: 'rare' };
+    emit('query', 'query 2：换稀有词 zebra——4 篇语料里只有 d1 包含它（IDF = log(4/1)），而 snow 出现在 3 篇（IDF = log(4/3)）：词越稀有，命中它的辨识度越高。', 2);
+    metrics.rare++;
+    items.cur = [{ id: 'd1', t: 'd1 · zebra ×1 → 3.9', st: 'ok', title: '同一篇 d1、同样命中 1 次：稀有词 zebra 的 IDF 加权让它拿到 3.9，远高于常见词 snow 的 1.1' }];
+    items.chips.push({ t: '稀有词加权：zebra 同命中 1 次 3.9 > snow 的 1.1（同一篇 d1）', st: 'ok' });
+    emit('score', 'zebra 同命中 1 次 → 3.9 分：稀有词加权生效（稀有 1）——对照同一篇 d1：snow 只得 1.1，zebra 却拿 3.9：IDF 衡量的是辨识度，不是拼写难度。', 2);
+    emit('rank', `运行结束：语料 ${metrics.docs} · 打分 ${metrics.scored} · 命中 ${metrics.hits} · 词频饱和 ${metrics.saturated} · 稀有词加权 ${metrics.rare}——词频饱和压住堆词，长度归一奖励短文，IDF 让稀有词脱颖而出：BM25 的排序是这三股力量的和。`, 0);
+  } else if (scenario === 'query') {
+    items.phase = { txt: '三查询语义对照', st: 'run' };
+    metrics.docs = 3;
+    emit('query', '语料 3 篇：d1「The quick brown fox jumps」· d2「quick fox in a forest」· d3「the fox sits on the brown box」。同一批文档，三种查询，三种语义。', 0);
+    items.q = { t: 'match "quick fox"', st: 'run' };
+    metrics.queries++;
+    emit('analy', 'match：查询文本先过分析器 → 分词 [quick, fox]，词项之间默认 OR——命中任一单词的文档都算命中。', 4);
+    emit('fields', 'd1 含 quick+fox、d2 含 quick+fox、d3 只含 fox——命中 2 篇：d1、d2。', 4);
+    metrics.matchHits = 2;
+    items.results.push({ t: 'match → 2 篇（d1 · d2）', st: 'ok', title: '分词 + OR：命中 quick 或 fox 任一即可，语义最宽松' });
+    emit('rank', 'match "quick fox" → 命中 d1、d2（match 2）：分词后的词项并集，最接近「模糊包含」的语义。', 2);
+    items.q = { t: 'term "Quick"', st: 'run' };
+    metrics.queries++;
+    emit('analy', 'term：不走分析器——拿原文 "Quick" 与索引里的词项做精确匹配。索引里存的是分析器分词后的词项：小写 quick，没有 "Quick"。', 5);
+    emit('fields', '原文 "Quick" vs 词项 quick：大小写不同即不匹配 → 0 命中。人眼觉得该命中的，term 未必认——它从不做分词、不做大小写折叠。', 5);
+    metrics.termHits = 0;
+    items.results.push({ t: 'term → 0 篇（原文精确 · 大小写敏感）', st: 'bad', title: 'term 不过分析器：索引里没有 "Quick" 这个词项' });
+    emit('rank', 'term "Quick" → 0 命中（term 0）：term 查询是「索引词项 vs 你给的原文」——想命中就得先用 match 走同一套分析器。', 5);
+    items.q = { t: 'match_phrase "brown fox"', st: 'run' };
+    metrics.queries++;
+    emit('analy', 'match_phrase：在 match 基础上要求词项相邻且顺序一致——"brown fox" 必须是连续的 brown→fox。', 6);
+    emit('fields', 'd1「quick brown fox」：brown 紧邻 fox 且顺序一致 → 命中；d3「fox … brown box」：fox 在前 brown 在后、还隔着单词 → 不命中。', 6);
+    metrics.phraseHits = 1;
+    items.results.push({ t: 'match_phrase → 1 篇（d1 · 词序相邻）', st: 'ok', title: '词项相邻 + 顺序一致：最接近「短语」语义' });
+    emit('rank', 'match_phrase "brown fox" → 命中 d1（phrase 1）：词序与相邻性是它和 match 的分水岭——d3 两个词都在，但顺序与距离都不对。', 6);
+    emit('rank', `运行结束：查询 ${metrics.queries}（match 命中 ${metrics.matchHits} · term 命中 ${metrics.termHits} · phrase 命中 ${metrics.phraseHits}）——同一批文档三种查询三种结果：先分词再查是 match 家族，term 是原文精确匹配，phrase 再压一层词序约束。`, 0);
+  } else {
+    items.phase = { txt: '基础排序 · 相近得分', st: 'run' };
+    metrics.docs = 3;
+    metrics.queries++;
+    items.q = { t: 'match "java" · 基础分', st: 'run' };
+    items.docs = [{ id: 'd1', t: 'd1 · 2.00', st: 'ok', note: '标题含 java（title 命中 + body 命中）' }, { id: 'd2', t: 'd2 · 1.90', st: 'ok', note: '正文含 java' }, { id: 'd3', t: 'd3 · 1.85', st: 'ok', note: '正文含 java · 高点击' }];
+    emit('query', '语料 3 篇都含 java：纯文本相关性的基础分非常接近（1.85 ~ 2.00）——业务上我们希望「标题命中」与「高点击」能改写这个排序。', 0);
+    emit('rank', '基础排序：d1 2.00 > d2 1.90 > d3 1.85——纯 BM25 分不出业务轻重。', 2);
+    items.q = { t: 'title^3 · 字段加权', st: 'run' };
+    metrics.queries++;
+    emit('fields', '给 title 字段加 boost 3（title^3）：命中 title 的字段得分 ×3——把「标题更重要」的业务判断写进基础打分。', 7);
+    metrics.boosted++;
+    items.docs[0].t = 'd1 · 5.00 · 升首';
+    items.docs[0].st = 'ok';
+    items.chips.push({ t: 'title^3：d1 命中 title → 得分 ×3 → 5.00 升至榜首', st: 'ok' });
+    emit('rank', 'd1 因 title 命中被 ×3：5.00 稳居第一（字段加权 1）——boost 是查询期静态干预：权重写死在查询里，人人同权。', 7);
+    items.q = { t: 'function_score · 点击率折算', st: 'run' };
+    metrics.queries++;
+    emit('fields', '再叠加 function_score：把 d3 的点击率折算成业务分 +0.5——高点击的文档虽然文本相关稍弱，但用户用脚投票证明了它更值得看。', 8);
+    metrics.rescored++;
+    items.docs[2].t = 'd3 · 2.35 · 越位';
+    items.docs[2].st = 'ok';
+    items.chips.push({ t: 'function_score：点击率 +0.5 → d3 2.35 越过 d2 1.90', st: 'ok' });
+    emit('rank', 'd3：1.85 + 0.5 = 2.35，越过 d2（业务分干预 1）——function_score 是查询期动态干预：把实时业务指标折算成分数参与排序。', 8);
+    emit('rank', `运行结束：语料 ${metrics.docs} · 字段加权 ${metrics.boosted} · 业务分干预 ${metrics.rescored}——最终排序 d1 5.00 > d3 2.35 > d2 1.90：BM25 决定「自然」，boost 与 function_score 决定「业务」，两层干预各管一件事。`, 0);
+  }
+  return frames;
+}
+function kafkaConsumer(p) {
+  const scenario = p.scenario || 'assign';
+  const sceneTag = { assign: '① 组内分配 · 分区归属', rebalance: '② Rebalance · eager 全组暂停', coop: '③ 增量协作 · cooperative 交接' }[scenario];
+  const frames = [];
+  const metrics = { joins: 0, assigned: 0, consumed: 0, rebalances: 0, revoked: 0, handed: 0 };
+  const items = { mode: scenario, phase: null, members: [], flash: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const setParts = (id, parts, st) => { const m = items.members.find(x => x.id === id); m.parts = parts; m.st = st; };
+  const join = id => {
+    metrics.joins++;
+    items.members.push({ id, parts: '', st: 'run' });
+    emit('client', `${id} 用同一 group.id 向协调器发起 JoinGroup（加入 ${metrics.joins}/4）。`, 1);
+  };
+  emit('client', `Kafka 消费组教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'assign') {
+    items.phase = { txt: 'join 消费组', st: 'run' };
+    emit('coord', 'topic orders：P0~P5 共 6 个分区。4 个消费者共用同一 group.id 加入后，协调器按 range 策略把分区摊给成员——分配结果就是每个成员的「领地」。', 0);
+    join('C1'); join('C2'); join('C3'); join('C4');
+    items.members.forEach(m => { m.st = 'ok'; });
+    items.phase = { txt: 'range 分配', st: 'run' };
+    for (const [id, parts, n] of [['C1', 'P0·P1', 2], ['C2', 'P2·P3', 2], ['C3', 'P4', 1], ['C4', 'P5', 1]]) {
+      metrics.assigned += n;
+      setParts(id, parts, 'ok');
+      flash(`${id} ← ${parts}`, 'ok');
+      emit('assign', `${id} ← ${parts}：range 按成员顺序把连续分区切成段（归属 ${metrics.assigned}/6）——每个分区同一时刻只归一名成员。`, 2);
+    }
+    items.phase = { txt: '组内唯一消费', st: 'run' };
+    for (const [msg, part, owner] of [['m0', 'P0', 'C1'], ['m1', 'P1', 'C1'], ['m2', 'P2', 'C2'], ['m3', 'P3', 'C2'], ['m4', 'P4', 'C3'], ['m5', 'P5', 'C4']]) {
+      metrics.consumed++;
+      flash(`${msg} · ${part} → ${owner}`, 'ok');
+      emit('parts', `${msg} 投到 ${part}，${owner} poll 拉取——分区唯一归属让这条消息组内只被 ${owner} 消费（消费 ${metrics.consumed}/6）。`, 3);
+    }
+    emit('client', `运行结束：加入 ${metrics.joins} · 归属 ${metrics.assigned} · 消费 ${metrics.consumed}——6 条消息 × 6 分区一一对应：组内唯一消费 = 每把分区钥匙只配一名成员；成员再多，钥匙只有 6 把。`, 0);
+  } else if (scenario === 'rebalance') {
+    items.phase = { txt: 'join 消费组', st: 'run' };
+    emit('coord', '同样的 4 成员 6 分区。这版的关键：成员不会永远健康——心跳超时就会触发全组再平衡。', 0);
+    join('C1'); join('C2'); join('C3'); join('C4');
+    items.members.forEach(m => { m.st = 'ok'; });
+    items.phase = { txt: 'range 分配', st: 'run' };
+    for (const [id, parts, n] of [['C1', 'P0·P1', 2], ['C2', 'P2·P3', 2], ['C3', 'P4', 1], ['C4', 'P5', 1]]) {
+      metrics.assigned += n;
+      setParts(id, parts, 'ok');
+      flash(`${id} ← ${parts}`, 'ok');
+      emit('assign', `${id} ← ${parts}（归属 ${metrics.assigned}/6）。`, 2);
+    }
+    items.phase = { txt: '消费进行中', st: 'run' };
+    for (const [msg, part, owner] of [['m0', 'P0', 'C1'], ['m1', 'P1', 'C1'], ['m2', 'P2', 'C2'], ['m3', 'P3', 'C2']]) {
+      metrics.consumed++;
+      flash(`${msg} · ${part} → ${owner}`, 'ok');
+      emit('parts', `${msg} 在 ${part} 由 ${owner} 消费（消费 ${metrics.consumed}/8）。`, 3);
+    }
+    items.phase = { txt: '心跳超时 · 判定死亡', st: 'warn' };
+    flash('C3 心跳超时', 'bad');
+    emit('watch', 'C3 的心跳窗口耗尽——死亡没有「通知」，只有协调器侧的超时判定：成员管理靠心跳、不靠握手。', 4);
+    metrics.rebalances++;
+    setParts('C3', '', 'dead');
+    flash('rebalance #1 · generation 0 → 1', 'warn');
+    emit('coord', '协调器触发 rebalance：generation 0→1（代际 +1，旧代的消费进度作废）。eager 协议：先全体撤销、再重新分配——这就是 Stop-The-World。', 5);
+    items.phase = { txt: 'eager · 全体撤销', st: 'bad' };
+    for (const [id, parts, n] of [['C1', 'P0·P1', 2], ['C2', 'P2·P3', 2], ['C4', 'P5', 1]]) {
+      metrics.revoked += n;
+      setParts(id, '', 'revoked');
+      flash(`撤销 ${id} · ${parts}`, 'bad');
+      emit('client', `${id} 撤销持有的 ${parts}、暂停消费（撤销 ${metrics.revoked}/6）——eager 的规则：谁也别想留着分区继续跑。`, 5);
+    }
+    metrics.revoked++;
+    flash('C3 的 P4 由协调器回收', 'bad');
+    emit('coord', 'C3 已死亡：它持有的 P4 由协调器收回（撤销 6/6）——6 个分区全部回到无主状态，组内消费整体停摆。', 5);
+    items.phase = { txt: '新代际重分配', st: 'run' };
+    for (const [id, parts] of [['C1', 'P0·P4'], ['C2', 'P2·P3'], ['C4', 'P1·P5']]) {
+      metrics.assigned += 2;
+      setParts(id, parts, 'ok');
+      flash(`${id} ← ${parts}`, 'ok');
+      emit('assign', `新代际分配：${id} ← ${parts}（归属 ${metrics.assigned}/12）——幸存的三名成员每人 2 个分区。`, 2);
+    }
+    items.phase = { txt: '恢复消费', st: 'run' };
+    for (const [msg, part, owner] of [['m4', 'P4', 'C1'], ['m5', 'P5', 'C4'], ['m6', 'P2', 'C2'], ['m7', 'P3', 'C2']]) {
+      metrics.consumed++;
+      flash(`${msg} · ${part} → ${owner}`, 'ok');
+      emit('parts', `${msg} 在 ${part} 由 ${owner} 消费（消费 ${metrics.consumed}/8）——重平衡结束后，消费从新归属继续。`, 3);
+    }
+    emit('client', `运行结束：加入 ${metrics.joins} · 归属 ${metrics.assigned} · 消费 ${metrics.consumed} · 重平衡 ${metrics.rebalances} · 撤销 ${metrics.revoked}——eager 的账：一次成员死亡 = 全组 6 个分区集体暂停一轮。`, 0);
+  } else {
+    items.phase = { txt: 'join 消费组', st: 'run' };
+    emit('coord', '4 成员 6 分区、初始分配与场景 ② 相同——但消费组启用了 cooperative-sticky：重平衡不再要求全体撤销。', 0);
+    join('C1'); join('C2'); join('C3'); join('C4');
+    items.members.forEach(m => { m.st = 'ok'; });
+    items.phase = { txt: 'range 分配', st: 'run' };
+    for (const [id, parts, n] of [['C1', 'P0·P1', 2], ['C2', 'P2·P3', 2], ['C3', 'P4', 1], ['C4', 'P5', 1]]) {
+      metrics.assigned += n;
+      setParts(id, parts, 'ok');
+      flash(`${id} ← ${parts}`, 'ok');
+      emit('assign', `${id} ← ${parts}（归属 ${metrics.assigned}/6）。`, 2);
+    }
+    items.phase = { txt: '消费进行中', st: 'run' };
+    for (const [msg, part, owner] of [['m0', 'P0', 'C1'], ['m1', 'P1', 'C1'], ['m2', 'P2', 'C2']]) {
+      metrics.consumed++;
+      flash(`${msg} · ${part} → ${owner}`, 'ok');
+      emit('parts', `${msg} 在 ${part} 由 ${owner} 消费（消费 ${metrics.consumed}/6）。`, 3);
+    }
+    items.phase = { txt: '成员主动离组', st: 'warn' };
+    flash('C2 LeaveGroup', 'bad');
+    emit('watch', 'C2 主动离组：先 commitSync 提交消费进度、再 LeaveGroup——优雅离组把「是否需要再平衡」的决定权交给协调器。', 7);
+    metrics.rebalances++;
+    setParts('C2', '', 'left');
+    flash('rebalance #1 · generation 0 → 1', 'warn');
+    emit('coord', '协调器代际 +1。cooperative 的规则：只撤销「必须移交」的分区——C2 走了，它持有的 P2、P3 需要过户；其他成员的领地原封不动。', 6);
+    items.phase = { txt: '增量撤销与交接', st: 'run' };
+    metrics.revoked += 2;
+    flash('C2 撤销 P2·P3', 'bad');
+    emit('client', 'C2 撤销 P2·P3（撤销 2）——这是本次重平衡唯一的停摆面：只有这两个分区短暂暂停。', 6);
+    metrics.handed++;
+    setParts('C1', 'P0·P1·P2', 'ok');
+    flash('P2 → C1', 'ok');
+    emit('assign', 'P2 当场过户给 C1（交接 1）——C1 原有的 P0·P1 原地续跑，没有一秒停顿。', 6);
+    metrics.handed++;
+    setParts('C4', 'P5·P3', 'ok');
+    flash('P3 → C4', 'ok');
+    emit('assign', 'P3 过户给 C4（交接 2）——C3 的 P4 全程未动：消费不中断的重平衡，代价只有两个分区的过户窗口。', 6);
+    items.phase = { txt: '消费不中断', st: 'run' };
+    for (const [msg, part, owner] of [['m3', 'P3', 'C4'], ['m4', 'P4', 'C3'], ['m5', 'P5', 'C4']]) {
+      metrics.consumed++;
+      flash(`${msg} · ${part} → ${owner}`, 'ok');
+      emit('parts', `${msg} 在 ${part} 由 ${owner} 消费（消费 ${metrics.consumed}/6）——重平衡期间 C1、C3 的消费从未暂停。`, 3);
+    }
+    emit('client', `运行结束：加入 ${metrics.joins} · 归属 ${metrics.assigned} · 消费 ${metrics.consumed} · 重平衡 ${metrics.rebalances} · 撤销 ${metrics.revoked} · 交接 ${metrics.handed}——cooperative 把「全组暂停」压缩成「两分区过户」：eager 为一致性付全体代价，cooperative 只为移交付局部代价。`, 0);
+  }
+  return frames;
+}
+function kafkaStorage(p) {
+  const scenario = p.scenario || 'log';
+  const sceneTag = { log: '① 分区与段 · 稀疏索引二分', zerocopy: '② 零拷贝 · 拷贝次数对照', roll: '③ 段滚动 · 删除与回收' }[scenario];
+  const frames = [];
+  const metrics = { writes: 0, found: 0, copied: 0, direct: 0, rolled: 0, deleted: 0, freed: 0 };
+  const items = { mode: scenario, phase: null, segs: [], flash: null, chips: [] };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const chip = (t, st) => items.chips.push({ t, st });
+  emit('log', `Kafka 日志存储教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'log') {
+    items.phase = { txt: '顺序追加 · 4 条', st: 'run' };
+    emit('log', '分区目录 logs/orders-0/ 下：00000000000000000000.log 与同名 .index 成对出现。消息只能顺序追加到 .log 尾部——顺序写是 Kafka 吞吐的第一来源。', 0);
+    for (let i = 0; i < 4; i++) {
+      metrics.writes++;
+      flash(`✎ m${i} · offset ${i}`, 'ok');
+      emit('produce', `m${i} append：写入 .log 尾部，offset ${i}（写入 ${metrics.writes}/4）——同一分区的写永远是追加，从不在中间改。`, 1);
+    }
+    items.segs.push({ id: 'S0', range: 'offset 0~3 · 4 条', st: 'ok' });
+    items.phase = { txt: '按 offset 读 · 稀疏索引二分', st: 'run' };
+    emit('index', '要读 offset 3：.index 是稀疏索引——它不记录每条消息，只存若干 (相对 offset, 物理位置) 对。检索问题 = 二分查找问题。', 2);
+    metrics.found++;
+    flash('二分定位 → offset 3 · pos 114', 'ok');
+    emit('index', '读 offset 3：索引二分命中 (3 → pos 114)，在 .log 内直接 seek 到物理位置读出（二分定位 1/2）——不需要扫段。', 3);
+    metrics.found++;
+    flash('二分定位 → offset 0 · pos 0', 'ok');
+    emit('index', '读 offset 0：二分落到段首 pos 0（二分定位 2/2）——两次读取各付 log₂(4) 次比较，消息再多也只是 log₂ 增长。', 3);
+    chip('稀疏索引：读任意 offset 都走二分——索引稀疏换来的代价是 log₂ 级查找', 'ok');
+    emit('page', '读出路径：定位后按 pos 读 .log 页——数据进 page cache 后对上层透明：写入与读取共享同一份缓存。', 3);
+    emit('log', `运行结束：写入 ${metrics.writes} · 二分定位 ${metrics.found}——.log 顺序写、.index 稀疏二分：段是 Kafka 一切读写的最小组织单位。`, 0);
+  } else if (scenario === 'zerocopy') {
+    items.phase = { txt: '写入 · 落 page cache', st: 'run' };
+    metrics.writes++;
+    flash('✎ m0 · 10KB', 'ok');
+    emit('produce', '一条 10KB 消息 m0 写入成功——数据落在 page cache（内核页缓存）：磁盘文件的一切读写都经它中转（写入 1/1）。', 1);
+    items.phase = { txt: '对照 · 传统 read+write：4 次拷贝', st: 'warn' };
+    emit('sock', '消费者要把这条 10KB 从磁盘发到网络。传统做法 read + write：四次搬运，逐次点亮。', 4);
+    metrics.copied++;
+    flash('拷贝 1/4 · DMA 磁盘 → page cache', 'warn');
+    emit('page', '① read：磁盘 .log → page cache——DMA 引擎搬运，不占 CPU（拷贝 1/4）。', 4);
+    metrics.copied++;
+    flash('拷贝 2/4 · CPU page cache → 用户态', 'warn');
+    emit('page', '② read：page cache → 用户态缓冲区——CPU 逐字节复制：同一份数据内核、用户各持一份（拷贝 2/4）。', 4);
+    metrics.copied++;
+    flash('拷贝 3/4 · CPU 用户态 → socket', 'warn');
+    emit('sock', '③ write：用户态 → socket 发送缓冲——第二次 CPU 搬运（拷贝 3/4）：数据在用户态走了一遭又回内核。', 4);
+    metrics.copied++;
+    flash('拷贝 4/4 · DMA socket → 网卡', 'warn');
+    emit('sock', '④ socket 缓冲 → 网卡：DMA 上线（拷贝 4/4）。合计：4 次拷贝 = 2 DMA + 2 CPU——10KB 尚可，换成大消息就是灾难。', 4);
+    chip('传统 read+write：4 次拷贝（2 DMA + 2 CPU）——CPU 是这条路最贵的搬运工', 'warn');
+    items.phase = { txt: '对照 · sendfile 零拷贝', st: 'run' };
+    metrics.direct++;
+    flash('零拷贝① · skb 引用页框（0 搬运）', 'ok');
+    emit('sock', 'Kafka 服务端改走 sendfile：内核把 page cache 的页框「引用」挂进 socket 的 skb——引用不是复制，这一步 0 字节搬运（直发 1/2）。', 5);
+    metrics.direct++;
+    flash('零拷贝② · DMA 直发网卡', 'ok');
+    emit('page', '网卡 DMA 引擎按页框引用直读 page cache 上线（直发 2/2）——全程 0 次 CPU 拷贝：数据自始至终没有离开内核。', 5);
+    chip('sendfile 路径：2 次 DMA · 0 次 CPU——大消息高吞吐的关键是让 CPU 少干活', 'ok');
+    emit('log', `运行结束：写入 ${metrics.writes} · 传统拷贝 ${metrics.copied} · 零拷贝直发 ${metrics.direct}——同一条消息两条路：4 次搬运 vs 2 次搬运，省掉的还恰是最贵的 CPU 拷贝。`, 0);
+  } else {
+    items.phase = { txt: '连续写入 8 条', st: 'run' };
+    emit('log', '段容量阈值 = 4 条（教学示意，真实 Kafka 按 1GB 或时间滚动）。先让 S0 写满 4 条，看滚动如何发生。', 6);
+    for (let i = 0; i < 4; i++) {
+      metrics.writes++;
+      flash(`✎ m${i} → S0 · offset ${i}`, 'ok');
+      emit('log', `m${i} append：S0 · offset ${i}（写入 ${metrics.writes}/8）。`, 1);
+    }
+    items.segs.push({ id: 'S0', range: 'offset 0~3', st: 'ro' });
+    metrics.writes++;
+    metrics.rolled++;
+    items.segs.push({ id: 'S1', range: 'offset 4~', st: 'ok' });
+    flash('滚动 → 新段 S1 · m4 入 S1', 'warn');
+    emit('log', 'm4 append：S0 已满 → 滚动出新段 S1（滚动 1），S0 转只读——m4 落在 S1 · offset 4（写入 5/8）。滚动让「删除」可以退化成「丢文件」。', 6);
+    for (let i = 5; i < 8; i++) {
+      metrics.writes++;
+      flash(`✎ m${i} → S1 · offset ${i}`, 'ok');
+      emit('log', `m${i} append：S1 · offset ${i}（写入 ${metrics.writes}/8）。`, 1);
+    }
+    items.phase = { txt: 'retention · 删除与回收', st: 'warn' };
+    metrics.deleted++;
+    items.segs[0].st = 'gone';
+    flash('删除段 S0', 'bad');
+    emit('log', '保留时长到期：S0（最早的段）过期——整体删除文件（删除 1）：Kafka 从不逐条删消息，段过期即删。', 7);
+    metrics.freed += 4;
+    flash('回收 4 条消息的磁盘空间', 'ok');
+    emit('log', '段文件消失 → 4 条消息的空间一次性归还磁盘（回收 4）——「删除 = 丢整段」：没有碎片化，只有整段消失。', 7);
+    emit('log', `运行结束：写入 ${metrics.writes} · 滚动 ${metrics.rolled} · 删除 ${metrics.deleted} · 回收 ${metrics.freed}——滚动把删除的粒度从「条」放大到「段」：回收与碎片化一并解决。`, 0);
+  }
+  return frames;
+}
+function rabbitmqCluster(p) {
+  const scenario = p.scenario || 'topology';
+  const sceneTag = { topology: '① 集群拓扑 · 跨节点路由', failover: '② 宕机对照 · 镜像接管', quorum: '③ quorum 队列 · 多数派语义' }[scenario];
+  const frames = [];
+  const metrics = { routed: 0, written: 0, consumed: 0, unavailable: 0, promoted: 0, acks: 0 };
+  const items = { mode: scenario, phase: null, brokers: [], queues: [], flash: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const broker = id => items.brokers.find(b => b.id === id);
+  const setRole = (id, role, st) => { const b = broker(id); b.role = role; b.st = st; };
+  const queue = id => items.queues.find(q => q.id === id);
+  emit('cluster', `RabbitMQ 集群教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'topology') {
+    items.brokers.push({ id: 'B1', role: '种子节点', st: 'ok' });
+    items.phase = { txt: '组建集群', st: 'run' };
+    emit('cluster', 'B1 先启动：共享 cookie 与集群名就位，成为种子节点。', 1);
+    items.brokers.push({ id: 'B2', role: '节点', st: 'ok' });
+    emit('cluster', 'B2 执行 join_cluster rabbit@B1 加入——元数据（交换机/队列/绑定）全网一致，任意节点都能回答「队列在哪」。', 1);
+    items.brokers.push({ id: 'B3', role: '节点', st: 'ok' });
+    emit('cluster', 'B3 同样加入。3 节点就绪——注意：数据的分布并不均匀：普通队列只活在声明它的节点。', 1);
+    items.phase = { txt: '声明队列 · 宿主节点', st: 'run' };
+    items.queues.push({ id: 'Q1', kind: '普通', loc: '宿主 B2', msgs: [], st: 'ok' });
+    flash('Q1 声明于 B2', 'ok');
+    emit('queues', 'Q1 声明在 B2：普通队列的数据只存在于宿主节点 B2——这是普通队列的核心性质。', 2);
+    items.queues.push({ id: 'Q2', kind: '普通', loc: '宿主 B3', msgs: [], st: 'ok' });
+    flash('Q2 声明于 B3', 'ok');
+    emit('queues', 'Q2 声明在 B3：同理，数据只活在自己的宿主。客户端连哪台都能发——因为元数据全网共享。', 2);
+    items.phase = { txt: '跨节点路由', st: 'run' };
+    emit('client', '客户端这次连的是 B1——但 m1 的目标 Q1 在 B2：集群内路由会完成这次「跨界投递」。', 2);
+    metrics.routed++;
+    flash('m1 → 路由转发到 Q1 @ B2', 'ok');
+    emit('route', 'B1 收到 m1：按元数据定位 Q1 宿主 = B2 → 集群内转发（路由 1/2）——「连错节点」在集群里不是错误。', 2);
+    metrics.written++;
+    queue('Q1').msgs.push('m1');
+    flash('✓ Q1（宿主 B2）收到 m1', 'ok');
+    emit('queues', 'Q1 在宿主 B2 追加 m1（写入 1/2）——数据落在 B2，与客户端连在哪儿无关。', 0);
+    metrics.consumed++;
+    flash('消费端从 Q1 取走 m1', 'ok');
+    emit('client', '消费端（连接 B2）从 Q1 取走 m1（消费 1/2）——跨节点路由到宿主后，就是一次本地出队。', 0);
+    emit('client', '同一段旅程再来一次：m2 的目标 Q2，宿主在 B3。', 2);
+    metrics.routed++;
+    flash('m2 → 路由转发到 Q2 @ B3', 'ok');
+    emit('route', 'B1 收到 m2 → 定位 Q2 宿主 B3 → 转发（路由 2/2）。', 2);
+    metrics.written++;
+    queue('Q2').msgs.push('m2');
+    flash('✓ Q2（宿主 B3）收到 m2', 'ok');
+    emit('queues', 'Q2 在宿主 B3 追加 m2（写入 2/2）。', 0);
+    metrics.consumed++;
+    flash('消费端从 Q2 取走 m2', 'ok');
+    emit('client', '消费端（连接 B3）从 Q2 取走 m2（消费 2/2）。', 0);
+    emit('cluster', `运行结束：路由 ${metrics.routed} · 写入 ${metrics.written} · 消费 ${metrics.consumed}——普通队列 = 数据单点 + 元数据共享：路由层把「队列在哪」翻译成「发去哪」。`, 0);
+  } else if (scenario === 'failover') {
+    items.brokers.push({ id: 'B1', role: '节点', st: 'ok' }, { id: 'B2', role: '节点', st: 'ok' }, { id: 'B3', role: '节点', st: 'ok' });
+    items.phase = { txt: '声明两种队列', st: 'run' };
+    items.queues.push({ id: 'Q镜像', kind: '镜像', loc: 'B2 主 · B3 镜像', msgs: [], st: 'ok' });
+    flash('Q镜像 声明：master B2 · 镜像 B3', 'ok');
+    emit('queues', 'Q镜像 声明在 B2：镜像队列把 master 的每次变更同步给镜像副本 B3——多活一份数据，就多一份可用性预算。', 3);
+    items.queues.push({ id: 'Q普通', kind: '普通', loc: '宿主 B2', msgs: [], st: 'ok' });
+    flash('Q普通 声明：只存 B2', 'warn');
+    emit('queues', 'Q普通 声明在 B2：没有任何副本——对照组，它的命运完全系于 B2 一台机器。', 2);
+    items.phase = { txt: '宕机前 · 写入与消费', st: 'run' };
+    metrics.written++;
+    queue('Q镜像').msgs.push('m1');
+    flash('✓ Q镜像（master B2）写入 m1', 'ok');
+    emit('queues', 'm1 写入 Q镜像：master B2 落盘并同步镜像 B3（写入 1/3）。', 3);
+    metrics.consumed++;
+    flash('消费端取走 m1', 'ok');
+    emit('client', '消费端从 Q镜像 取走 m1（消费 1/3）。', 0);
+    metrics.written++;
+    queue('Q镜像').msgs.push('m2');
+    flash('✓ Q镜像 写入 m2', 'ok');
+    emit('queues', 'm2 写入 Q镜像（写入 2/3）——m2 还没来得及被消费，宕机先到了。', 3);
+    items.phase = { txt: 'B2 宕机 · 两种命运', st: 'warn' };
+    setRole('B2', '宕机', 'down');
+    flash('B2 宕机', 'bad');
+    emit('cluster', 'B2 宕机：心跳中断、其余节点感知。对两种队列，这是同一次宕机、两种结局。', 0);
+    metrics.unavailable++;
+    queue('Q普通').st = 'down';
+    flash('✗ Q普通 随宿主失联', 'bad');
+    emit('queues', 'Q普通：数据随宿主一起消失——客户端连 B3 也取不到（不可用 1）。普通队列的可用性 = 宿主的可用性。', 2);
+    metrics.promoted++;
+    setRole('B3', 'Q镜像 新主', 'ok');
+    queue('Q镜像').loc = 'B3 主 · B2 宕机';
+    flash('✓ 镜像 B3 提升为新 master', 'ok');
+    emit('elect', 'Q镜像：master 消失 → 镜像副本 B3 提升为新 master（接管 1）——m1、m2 一条不少地留在 B3。', 3);
+    items.phase = { txt: '故障转移 · 恢复服务', st: 'run' };
+    emit('client', '客户端故障转移：重连 B3——对业务侧只是换了个连接地址；Q镜像 换了宿主，消息没丢。', 5);
+    metrics.written++;
+    queue('Q镜像').msgs.push('m3');
+    flash('✓ m3 写入新主 B3', 'ok');
+    emit('queues', 'm3 → 新 master B3 写入（写入 3/3）：镜像提升后队列继续可用。', 3);
+    metrics.consumed++;
+    flash('消费端取走 m2', 'ok');
+    emit('client', '消费端从提升后的 B3 取走宕机前写入的 m2（消费 2/3）。', 0);
+    metrics.consumed++;
+    flash('消费端取走 m3', 'ok');
+    emit('client', 'm3 也被取走（消费 3/3）——Q镜像 的消费中断只发生在接管的那一瞬间。', 0);
+    emit('cluster', `运行结束：写入 ${metrics.written} · 消费 ${metrics.consumed} · 不可用 ${metrics.unavailable} · 接管 ${metrics.promoted}——同一次宕机两种结局：没有副本的 Q普通 失联，有镜像的 Q镜像 只断一瞬。`, 0);
+  } else {
+    items.brokers.push({ id: 'B1', role: 'Q 副本', st: 'ok' }, { id: 'B2', role: 'Q 副本', st: 'ok' }, { id: 'B3', role: 'Q 副本', st: 'ok' });
+    items.phase = { txt: '声明 quorum 队列', st: 'run' };
+    items.queues.push({ id: 'Q', kind: 'quorum', loc: 'B1·B2·B3 各持副本', msgs: [], st: 'ok' });
+    flash('Q · quorum 队列 · 3 副本', 'ok');
+    emit('queues', 'Q 声明为 quorum 队列：队列本身就是 Raft 复制组——B1/B2/B3 各持一份完整副本，没有主从之分，只有多数派。', 7);
+    items.phase = { txt: '多数派 ack · 写入', st: 'run' };
+    metrics.written++;
+    metrics.acks += 2;
+    queue('Q').msgs.push('m1');
+    flash('✓ m1 提交 · 多数派 ack 2', 'ok');
+    emit('elect', '写 m1：leader（B1 上的副本）提案 → B2 ack → 2/3 多数达成 → 提交（写 1/4 · ack 2）——ack 的含义是数据已在多数派，而不是只在主节点。', 6);
+    metrics.consumed++;
+    flash('消费端取走 m1', 'ok');
+    emit('client', '消费端从 Q 取走 m1（消费 1/4）。', 0);
+    metrics.written++;
+    metrics.acks += 2;
+    queue('Q').msgs.push('m2');
+    flash('✓ m2 提交 · 多数派 ack 4', 'ok');
+    emit('elect', '写 m2：B3 ack → 多数派 → 提交（写 2/4 · ack 4）。', 6);
+    metrics.consumed++;
+    flash('消费端取走 m2', 'ok');
+    emit('client', 'm2 被取走（消费 2/4）。', 0);
+    items.phase = { txt: 'B1 宕机 · 多数仍在', st: 'warn' };
+    setRole('B1', '宕机', 'down');
+    flash('B1 宕机', 'bad');
+    emit('cluster', 'B1 宕机：副本组剩 B2 + B3 = 2/3——多数派依然存在：队列不降级、不拒写。', 6);
+    flash('副本组自动选主 → B2 接任', 'warn');
+    emit('elect', 'quorum 组内部自动选举：B2 接任 leader——这个动作对客户端完全透明，没有不可用窗口。', 4);
+    metrics.written++;
+    metrics.acks += 2;
+    queue('Q').msgs.push('m3');
+    flash('✓ m3 提交 · 多数派 ack 6', 'ok');
+    emit('elect', '写 m3：新 leader B2 提案 → B3 ack → 提交（写 3/4 · ack 6）——宕机期间写入照常，只是 ack 不再经过 B1。', 6);
+    metrics.consumed++;
+    flash('消费端取走 m3', 'ok');
+    emit('client', 'm3 被取走（消费 3/4）。', 0);
+    metrics.written++;
+    metrics.acks += 2;
+    queue('Q').msgs.push('m4');
+    flash('✓ m4 提交 · 多数派 ack 8', 'ok');
+    emit('elect', '写 m4（写 4/4 · ack 8）——从 B1 宕机到此刻，Q 的写入与消费从未中断。', 6);
+    metrics.consumed++;
+    flash('消费端取走 m4', 'ok');
+    emit('client', 'm4 被取走（消费 4/4）。', 0);
+    emit('cluster', `运行结束：写入 ${metrics.written} · 消费 ${metrics.consumed} · 多数派 ack ${metrics.acks}——每条消息 = 2 个副本 ack（4 条 × 2）；宕机不过半，复制组自动续命。`, 0);
+  }
+  return frames;
+}
+function rocketmqDledger(p) {
+  const scenario = p.scenario || 'master-slave';
+  const sceneTag = { 'master-slave': '① 主从异步 · 丢失窗口', raft: '② DLedger 多数派 · 零丢失', return: '③ 旧主回归 · 日志追平' }[scenario];
+  const frames = [];
+  const metrics = { writes: 0, synced: 0, lost: 0, failovers: 0, elected: 0, replayed: 0 };
+  const items = { mode: scenario, phase: null, roles: [], flash: null, chips: [] };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const chip = (t, st) => items.chips.push({ t, st });
+  const setRole = (id, role, st) => {
+    const existing = items.roles.find(r => r.id === id);
+    if (existing) { existing.role = role; existing.st = st; } else { items.roles.push({ id, role, st }); }
+  };
+  emit('master', `RocketMQ 高可用教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'master-slave') {
+    setRole('A', '主', 'ok');
+    setRole('B', '从', 'ok');
+    items.phase = { txt: '异步复制 · 写入与同步', st: 'run' };
+    emit('master', '主从模式：BrokerA（主）+ BrokerB（从）。生产者只写 A，A 把 commitlog 异步同步给 B——brokerRole = ASYNC_MASTER：主库写入即返回成功，不等从库。', 1);
+    for (let i = 1; i <= 4; i++) {
+      metrics.writes++;
+      flash(`✎ m${i} → A`, 'ok');
+      emit('master', `m${i}：A 写入 commitlog（写 ${metrics.writes}/6）。`, 1);
+      metrics.synced++;
+      flash(`B ✓ 复制 m${i}`, 'ok');
+      emit('slave', `B 复制完成 m${i}（同步 ${metrics.synced}/4）——此刻主从一致。`, 0);
+    }
+    chip('前 4 条：A/B 完全一致——异步窗口内没有消息', 'ok');
+    metrics.writes++;
+    flash('✎ m5 → A（ack 即回）', 'ok');
+    emit('master', 'm5：A 写入并立刻 ack（写 5/6）——异步复制没有等待 B：m5 进入「同步路上」的窗口。', 1);
+    metrics.writes++;
+    chip('m5/m6 处在复制延迟窗口：A 已 ack、B 尚未收到——「成功」≠「安全」', 'warn');
+    flash('✎ m6 → A（ack 即回）', 'ok');
+    emit('master', 'm6 同样 ack（写 6/6）——窗口里的这两条消息，是接下来事故的伏笔。', 1);
+    items.phase = { txt: 'A 宕机 · 切换', st: 'warn' };
+    setRole('A', '宕机', 'down');
+    flash('A 宕机 · 心跳超时', 'bad');
+    emit('namesrv', 'A 的心跳超时——NameServer 感知失联：路由表里 A 下线。', 2);
+    metrics.failovers++;
+    setRole('B', '新主', 'ok');
+    flash('B 提升为新主', 'ok');
+    emit('namesrv', 'NameServer 把 B 提升为新主（切换 1）——B 的 commitlog 停在「A 消失的那一刻之前」。', 2);
+    items.phase = { txt: '读新主 · 丢失窗口', st: 'bad' };
+    metrics.lost++;
+    flash('✗ m5 缺失', 'bad');
+    emit('producer', '客户端从新主 B 拉取历史消息：m5 不在 B 的 commitlog——丢失 1（m5）。', 2);
+    metrics.lost++;
+    flash('✗ m6 缺失', 'bad');
+    emit('producer', 'm6 同样缺失（丢失 2）：它们只存在于 A 已 ack 而未同步的状态，随 A 一起消失。', 2);
+    emit('master', `运行结束：写入 ${metrics.writes} · 同步 ${metrics.synced} · 丢失 ${metrics.lost} · 切换 ${metrics.failovers}——丢的正好是「已 ack 未同步」的 2 条：异步复制的 ack 只代表主库收下了。`, 0);
+  } else if (scenario === 'raft') {
+    setRole('A', 'leader', 'ok');
+    setRole('B', 'follower', 'ok');
+    setRole('C', 'follower', 'ok');
+    items.phase = { txt: '多数派复制 · 三副本', st: 'run' };
+    emit('dledger', 'DLedger：A/B/C 三个副本组成 Raft 日志组（dLedgerEnable = true）——每副本一份 commitlog，写请求复制到多数派后才返回成功：没有主从，只有 leader。', 4);
+    for (const [i, who] of [[1, 'B'], [2, 'C'], [3, 'B']]) {
+      emit('master', `m${i}：leader A 发起复制提案（任期 1）——B、C 并行收到，谁先 ack 都算多数派一票。`, 3);
+      metrics.writes++;
+      metrics.synced++;
+      flash(`✓ m${i} 提交 · A+${who} 多数派`, 'ok');
+      emit('dledger', `${who} 先 ack → A+${who} = 2/3 多数 → 提交（写 ${metrics.writes}/5 · 同步 ${metrics.synced}/5）——ack 的条件是数据在多数派，而不是 leader 说了算。`, 4);
+    }
+    items.phase = { txt: 'A 宕机 · 选举', st: 'warn' };
+    setRole('A', '宕机', 'down');
+    flash('A 宕机', 'bad');
+    emit('dledger', 'A 宕机——B、C 仍在：多数派不散。已提交的 3 条日志完整躺在 B 与 C 上。', 5);
+    metrics.elected++;
+    setRole('B', 'leader', 'ok');
+    flash('B 当选 leader', 'ok');
+    emit('dledger', '选举：B、C 的日志长度相同（各 3 条）→ 按任期与日志比较后 B 赢得 C 的选票 → B 当选（选主 1）——已提交消息一条没丢。', 5);
+    items.phase = { txt: '新 leader 续写', st: 'run' };
+    for (const [i, who] of [[4, 'C'], [5, 'C']]) {
+      emit('slave', `m${i}：新 leader B 发起复制提案（任期 2）——复制到 C。`, 3);
+      metrics.writes++;
+      metrics.synced++;
+      flash(`✓ m${i} 提交 · B+${who} 多数派`, 'ok');
+      emit('dledger', `${who} ack → B+${who} 多数 → 提交（写 ${metrics.writes}/5 · 同步 ${metrics.synced}/5）。`, 4);
+    }
+    emit('dledger', `运行结束：写入 ${metrics.writes} · 同步 ${metrics.synced} · 选主 ${metrics.elected} · 丢失 ${metrics.lost}——DLedger 的 ack = 数据已在多数派：宕机换来的是选举，不是丢失。`, 0);
+  } else {
+    setRole('A', '宕机', 'down');
+    setRole('B', 'leader', 'ok');
+    setRole('C', 'follower', 'ok');
+    items.phase = { txt: 'B 任上写入', st: 'run' };
+    emit('dledger', '时间线推进：A 宕机后 B 当选 leader（任期 2），C 为 follower。B 任上先写入 m1、m2——看新 leader 如何提交。', 4);
+    for (const [i] of [[1], [2]]) {
+      metrics.writes++;
+      metrics.synced++;
+      flash(`✓ m${i} 提交 · B+C 多数派`, 'ok');
+      emit('dledger', `m${i}：B 提案 → C ack → 2/3 提交（写 ${metrics.writes}/4 · 同步 ${metrics.synced}/4）。`, 4);
+    }
+    items.phase = { txt: '旧主 A 回归', st: 'warn' };
+    setRole('A', 'follower · 回归中', 'warn');
+    flash('A 复活 · 任期落后', 'warn');
+    emit('master', 'A 复活：它的日志停在宕机前（比 B 少 m1、m2 两条）——B 的任期更高：A 没有竞选资格，只能以 follower 身份回归。', 6);
+    metrics.replayed++;
+    flash('A ← B 追平 m1', 'ok');
+    emit('slave', 'A 以 follower 身份向新 leader B 拉取落后日志：m1 追平（日志追平 1/2）。', 6);
+    metrics.replayed++;
+    setRole('A', 'follower', 'ok');
+    flash('A ← B 追平 m2', 'ok');
+    emit('slave', 'm2 追平（追平 2/2）——落后多少拉多少：A 重新成为与多数派一致的普通副本，恢复参与复制。', 6);
+    items.phase = { txt: '追平后 · 全员参与', st: 'run' };
+    for (const [i, who] of [[3, 'A'], [4, 'A']]) {
+      metrics.writes++;
+      metrics.synced++;
+      flash(`✓ m${i} 提交 · B+${who} 多数派`, 'ok');
+      emit('dledger', `m${i}：B 提案 → ${who} ack → 提交（写 ${metrics.writes}/4 · 同步 ${metrics.synced}/4）——回归的 A 也能参与多数派了。`, 4);
+    }
+    emit('dledger', `运行结束：写入 ${metrics.writes} · 同步 ${metrics.synced} · 追平 ${metrics.replayed} · 选主 ${metrics.elected} · 丢失 ${metrics.lost}——旧主回归 = 任期落后 → follower 身份 → 追平日志：DLedger 把「切主」退化成了普通日志复制。`, 0);
+  }
+  return frames;
+}
+function zkLock(p) {
+  const scenario = p.scenario || 'ephemeral';
+  const sceneTag = { ephemeral: '① 临时节点 · 抢占与释放', queue: '② 顺序节点 · 公平排队', watch: '③ 惊群对比 · 精准唤醒' }[scenario];
+  const frames = [];
+  const metrics = { acquires: 0, releases: 0, queued: 0, woken: 0 };
+  const items = { mode: scenario, phase: null, holder: null, waiters: [], queue: [], flash: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const phase = (txt, st) => { items.phase = { txt, st }; };
+  const hold = id => { metrics.acquires++; items.holder = { id, st: 'hold' }; };
+  const release = () => { metrics.releases++; items.holder = null; };
+  const removeWaiter = id => { items.waiters = items.waiters.filter(w => w.id !== id); };
+  const enqueue = (id, owner) => { metrics.queued++; items.queue.push({ id, owner, st: 'ok' }); };
+  const dequeue = id => { items.queue = items.queue.filter(q => q.id !== id); };
+  emit('clients', `ZooKeeper 分布式锁教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'ephemeral') {
+    phase('临时节点 · 抢占与释放', 'run');
+    emit('clients', 'A、B 争抢同一个锁根 /lock——临时节点：谁 create 成功谁持锁。', 0);
+    hold('A');
+    flash('✓ A create /lock 成功', 'ok');
+    emit('lock', 'A create EPHEMERAL /lock 成功 → 持锁（获取 1/2）。临时节点的生命与会话绑定。', 0);
+    emit('clients', 'B 到达，尝试 create /lock——锁已存在。', 1);
+    items.waiters.push({ id: 'B', txt: 'watch /lock · NodeDeleted', st: 'wait' });
+    emit('watch', 'B create 抛 NodeExists → 抢锁失败，注册一次性 Watch：exists(/lock, true)——等删除事件。', 2);
+    release();
+    flash('A delete /lock', 'ok');
+    emit('ephemeral', 'A 显式 delete /lock（释放 1/2）——服务端向注册者投递 NodeDeleted。', 3);
+    metrics.woken++;
+    emit('watch', 'B 收到 NodeDeleted（唤醒 1/1）：Watch 是一次性的——事件消费后自动失效，每次等锁都要重注册。', 2);
+    removeWaiter('B');
+    hold('B');
+    flash('✓ B 重抢成功 → 持锁', 'ok');
+    emit('lock', 'B 立刻重抢：create 成功 → 持锁（获取 2/2）。', 0);
+    phase('会话兜底 · 自动清理', 'warn');
+    release();
+    flash('B 会话超时 · 服务端清理节点', 'bad');
+    emit('session', 'B 会话中断：连接断开不立即清理——服务端判定会话超时后，自动删除其临时节点（释放 2/2）。持锁进程崩溃，锁也能自动让出，不死锁。', 3);
+    phase('演示完成', 'ok');
+    emit('lock', `运行结束：获取 ${metrics.acquires} · 释放 ${metrics.releases} · 排队 ${metrics.queued} · 唤醒 ${metrics.woken}——显式 delete 与会话超时都会让锁让出：临时节点把锁的生命周期交给会话。`, 0);
+  } else if (scenario === 'queue') {
+    phase('顺序取号 · 最小号持锁', 'run');
+    emit('clients', 'A/B/C 依次 create EPHEMERAL_SEQUENTIAL 取号：最小序号持锁，其余人只 watch 自己的前驱。', 5);
+    items.queue.push({ id: 'c-0000', owner: 'A', st: 'ok' });
+    hold('A');
+    items.queue[items.queue.length - 1].st = 'hold';
+    flash('✓ A 取号 c-0000 · 最小号 → 持锁', 'ok');
+    emit('queue', 'A create → c-0000（最小号）→ A 持锁（获取 1/3）。', 5);
+    enqueue('c-0001', 'B');
+    items.waiters.push({ id: 'B', txt: 'watch 前驱 c-0000', st: 'wait' });
+    emit('queue', 'B create → c-0001（排队 1/2）。B 不 watch 锁根，只 watch 前驱 c-0000（A 的节点）。', 7);
+    enqueue('c-0002', 'C');
+    items.waiters.push({ id: 'C', txt: 'watch 前驱 c-0001', st: 'wait' });
+    emit('queue', 'C create → c-0002（排队 2/2）。C watch 前驱 c-0001（B 的节点）。', 7);
+    dequeue('c-0000');
+    release();
+    flash('A delete c-0000', 'ok');
+    emit('watch', 'A 释放（释放 1/3）：delete c-0000 → 事件只命中 watch 它的人——也就是 B。', 7);
+    metrics.woken++;
+    removeWaiter('B');
+    hold('B');
+    const bQueue = items.queue.find(q => q.id === 'c-0001');
+    if (bQueue) bQueue.st = 'hold';
+    flash('✓ B 被唤醒 · c-0001 最小号 → 持锁', 'ok');
+    emit('queue', 'B 收到前驱删除事件（唤醒 1/2）→ c-0001 成为最小序号 → B 持锁（获取 2/3）。', 6);
+    dequeue('c-0001');
+    release();
+    flash('B delete c-0001', 'ok');
+    emit('watch', 'B 释放（释放 2/3）：delete c-0001 → 只唤醒 watch 它的 C。', 7);
+    metrics.woken++;
+    removeWaiter('C');
+    hold('C');
+    const cQueue = items.queue.find(q => q.id === 'c-0002');
+    if (cQueue) cQueue.st = 'hold';
+    flash('✓ C 被唤醒 · c-0002 最小号 → 持锁', 'ok');
+    emit('queue', 'C 收到事件（唤醒 2/2）→ c-0002 最小号 → C 持锁（获取 3/3）。', 6);
+    dequeue('c-0002');
+    release();
+    flash('C delete c-0002', 'ok');
+    emit('watch', 'C 释放（释放 3/3）：后面没有人 watch c-0002——队列清空，无人被唤醒。', 3);
+    phase('演示完成', 'ok');
+    emit('queue', `运行结束：获取 ${metrics.acquires} · 释放 ${metrics.releases} · 排队 ${metrics.queued} · 唤醒 ${metrics.woken}——唤醒沿队列链单播：delete c-000N 只吵醒 watch 它的后一位，惊群消失。`, 7);
+  } else {
+    phase('惊群 · 一次唤醒全部', 'run');
+    emit('clients', 'A 持普通临时锁；X/Y/Z 加入抢锁，失败者全部 watch 同一个锁节点——先看惊群。', 0);
+    hold('A');
+    flash('✓ A create /lock 成功 → 持锁', 'ok');
+    emit('lock', 'A create 成功 → 持锁（获取 1/4）。', 0);
+    items.waiters.push({ id: 'X', txt: 'watch /lock · NodeDeleted', st: 'wait' });
+    emit('clients', 'X create → NodeExists：抢锁失败。X 注册 Watch 等删除事件。', 2);
+    items.waiters.push({ id: 'Y', txt: 'watch /lock · NodeDeleted', st: 'wait' });
+    emit('clients', 'Y create → NodeExists：失败。Y 同样 watch 锁节点。', 2);
+    items.waiters.push({ id: 'Z', txt: 'watch /lock · NodeDeleted', st: 'wait' });
+    emit('clients', 'Z create → NodeExists：失败。Z watch 锁节点——现在 3 个等待者都挂在同一个节点上。', 2);
+    release();
+    metrics.woken += 3;
+    phase('惊群 · 三人同时重抢', 'warn');
+    flash('A delete /lock · 惊群唤醒 3 个等待者', 'warn');
+    emit('watch', 'A 释放（释放 1/3）：delete /lock → NodeDeleted 同时投递给 X、Y、Z（唤醒 3/5）——一次释放吵醒所有人，只有 1 人能赢：羊群效应。', 4);
+    removeWaiter('X');
+    hold('X');
+    flash('✓ X 抢到 → 持锁', 'ok');
+    emit('lock', '三人同时重抢 create——只有 X 成功（获取 2/4）。Y、Z 再次 NodeExists。', 0);
+    phase('转公平排队 · watch 前驱', 'run');
+    emit('watch', 'Y、Z 改用临时顺序节点排队：每人取号、只 watch 前驱——把广播唤醒变回单播。', 5);
+    enqueue('c-0001', 'Y');
+    const yWaiter = items.waiters.find(w => w.id === 'Y');
+    if (yWaiter) yWaiter.txt = 'watch 前驱 = 持锁者 X'; else items.waiters.push({ id: 'Y', txt: 'watch 前驱 = 持锁者 X', st: 'wait' });
+    emit('queue', 'Y create → c-0001（排队 1/2）。Y 的前驱是当前持锁者 X——watch 它的节点。', 7);
+    enqueue('c-0002', 'Z');
+    const zWaiter = items.waiters.find(w => w.id === 'Z');
+    if (zWaiter) zWaiter.txt = 'watch 前驱 c-0001'; else items.waiters.push({ id: 'Z', txt: 'watch 前驱 c-0001', st: 'wait' });
+    emit('queue', 'Z create → c-0002（排队 2/2）。Z 的前驱是 c-0001（Y 的节点）——watch 它。', 7);
+    release();
+    metrics.woken++;
+    removeWaiter('Y');
+    hold('Y');
+    const yQueue = items.queue.find(q => q.id === 'c-0001');
+    if (yQueue) yQueue.st = 'hold';
+    flash('X 释放 → 只唤醒 Y（精准）', 'ok');
+    emit('watch', 'X 释放（释放 2/3）：事件只命中 watch 前驱的 Y——精准 1 次（唤醒 4/5），Z 不受打扰。', 7);
+    dequeue('c-0001');
+    release();
+    metrics.woken++;
+    removeWaiter('Z');
+    hold('Z');
+    const zQueue = items.queue.find(q => q.id === 'c-0002');
+    if (zQueue) zQueue.st = 'hold';
+    flash('Y 释放 → 只唤醒 Z（精准）', 'ok');
+    emit('watch', 'Y 释放（释放 3/3）：delete c-0001 → 只唤醒 Z（唤醒 5/5）。', 7);
+    phase('演示完成 · Z 持锁', 'ok');
+    emit('queue', `运行结束：获取 ${metrics.acquires} · 释放 ${metrics.releases} · 排队 ${metrics.queued} · 唤醒 ${metrics.woken}——Z 当前持锁（获取 4/4，未释放）。watch 锁节点 = 释放 1 次唤醒 3 人（惊群）；watch 前驱 = 释放 1 次只吵醒该轮到的人。`, 6);
+  }
+  return frames;
+}
+function seataTx(p) {
+  const scenario = p.scenario || 'success';
+  const sceneTag = { success: '① 全局事务 · 分支注册与二阶段', rollback: '② 失败补偿 · undo_log 逆向回滚', tcc: '③ 模式对比 · AT 与 TCC' }[scenario];
+  const frames = [];
+  const metrics = { globals: 0, branches: 0, commits: 0, rollbacks: 0, undos: 0 };
+  const items = { mode: scenario, phase: null, xid: null, branches: [], chips: [], flash: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const phase = (txt, st) => { items.phase = { txt, st }; };
+  const setBranch = (id, txt, st, note) => {
+    const found = items.branches.find(b => b.id === id);
+    if (found) { found.txt = txt; found.st = st; found.note = note; } else { items.branches.push({ id, txt, st, note }); }
+  };
+  const chip = (t, st) => items.chips.push({ t, st });
+  const rmRegister = ['rm1 · 订单', 'rm2 · 库存', 'rm3 · 账户'];
+  emit('tm', `Seata 分布式事务教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'success') {
+    phase('TX-001 · 一阶段：分支执行与注册', 'run');
+    emit('tm', '下单链路 = 订单 / 库存 / 账户三张表。AT 模式一阶段：本地 SQL 照常提交，业务零感知。', 0);
+    metrics.globals++;
+    items.xid = 'TX-001';
+    emit('tc', 'TM 开启全局事务：TC 生成全局 XID = TX-001（全局 1/1）并下发——XID 沿调用链透传给每个 RM。', 1);
+    for (const id of rmRegister) {
+      metrics.branches++;
+      setBranch(id, '本地已提交', 'ok', 'undo_log 已记录');
+      flash(`✓ ${id} 本地提交 · 分支已注册`, 'ok');
+      emit('rm', `${id}：本地 SQL 执行并提交 → 向 TC 注册分支（分支 ${metrics.branches}/3）→ 改前数据前镜像写入 undo_log。`, 3);
+    }
+    phase('二阶段 · 全局提交', 'run');
+    emit('tc', '三个分支全部成功 → TM 发起全局提交。', 4);
+    for (const id of rmRegister) {
+      metrics.commits++;
+      setBranch(id, '提交完成', 'ok', 'undo_log 已删除');
+      flash(`TC 通知 ${id}：删除 undo_log`, 'ok');
+      emit('undo', `${id}：二阶段提交——删除 undo_log（提交 ${metrics.commits}/3）。本地已提交，无需任何回滚动作。`, 4);
+    }
+    phase('全局提交完成', 'ok');
+    emit('tm', `运行结束：全局 ${metrics.globals} · 分支 ${metrics.branches} · 提交 ${metrics.commits} · 回滚 ${metrics.rollbacks} · undo ${metrics.undos}——三分支全部成功：二阶段 = 删镜像；undo_log 从不参与业务回滚。`, 0);
+  } else if (scenario === 'rollback') {
+    phase('TX-002 · 一阶段：前两分支成功', 'run');
+    emit('tm', '这一笔：订单 + 库存成功后，账户在扣款前校验失败——注意校验发生在分支注册之前。', 0);
+    metrics.globals++;
+    items.xid = 'TX-002';
+    emit('tc', 'TC 生成全局 XID = TX-002（全局 1/1）。', 1);
+    metrics.branches++;
+    setBranch('rm1 · 订单', '本地已提交', 'ok', 'undo_log 已记录');
+    flash('✓ 订单分支注册', 'ok');
+    emit('rm', 'rm1 · 订单：插入订单本地提交 → 注册分支（分支 1/2）→ 前镜像写入 undo_log。', 3);
+    metrics.branches++;
+    setBranch('rm2 · 库存', '本地已提交', 'ok', 'undo_log 已记录');
+    flash('✓ 库存分支注册', 'ok');
+    emit('rm', 'rm2 · 库存：扣 2 件（100 → 98）本地提交 → 注册分支（分支 2/2）→ 前镜像 100 写入 undo_log。', 3);
+    flash('rm3 余额不足 · 校验失败', 'bad');
+    emit('rm', 'rm3 · 账户：扣款前校验余额 98 < 200 → 业务异常——校验在分支注册之前：本地没有提交，也没有 undo_log。', 2);
+    phase('二阶段 · 全局回滚', 'warn');
+    emit('tm', '异常沿调用链传回 TM → 发起全局回滚：TC 逐个通知已注册分支。', 5);
+    metrics.rollbacks++;
+    metrics.undos++;
+    setBranch('rm1 · 订单', '← 反向 SQL 补偿', 'warn', '补偿中');
+    chip('订单 #9002 恢复', 'ok');
+    flash('✓ 订单分支前镜像补偿', 'ok');
+    emit('undo', 'TC 通知订单 RM：读 undo_log 前镜像 → 生成反向 SQL（删除刚插入的订单）→ 逆向补偿（回滚 1/2 · undo 1/2）。', 5);
+    metrics.rollbacks++;
+    metrics.undos++;
+    setBranch('rm2 · 库存', '← 反向 SQL 补偿', 'warn', '补偿中');
+    chip('库存 98→100', 'ok');
+    flash('✓ 库存分支前镜像补偿', 'ok');
+    emit('undo', 'TC 通知库存 RM：前镜像 100 → 反向 UPDATE 恢复（回滚 2/2 · undo 2/2）。', 5);
+    setBranch('rm1 · 订单', '已回滚', 'ok', 'undo_log 已删除');
+    setBranch('rm2 · 库存', '已回滚', 'ok', 'undo_log 已删除');
+    phase('回滚完成', 'ok');
+    emit('tm', `运行结束：全局 ${metrics.globals} · 分支 ${metrics.branches} · 提交 ${metrics.commits} · 回滚 ${metrics.rollbacks} · undo ${metrics.undos}——未注册的账户分支不在回滚范围：补偿只覆盖「已注册且已改」的分支。`, 0);
+  } else {
+    phase('TX-003 · TCC Try', 'run');
+    emit('tm', '同一链路改用 TCC：每分支实现 Try / Confirm / Cancel 业务接口——没有 undo_log，补偿是业务动作。', 6);
+    metrics.globals++;
+    items.xid = 'TX-003';
+    emit('tc', 'TC 生成全局 XID = TX-003（全局 1/2）。', 1);
+    for (const id of rmRegister) {
+      metrics.branches++;
+      setBranch(id, 'Try 预留 ✓', 'warn', '资源已冻结');
+      flash(`✓ ${id} Try 冻结成功`, 'ok');
+      emit('tcc', `${id}：Try 预留资源（分支 ${metrics.branches}/5）。`, 6);
+    }
+    phase('TX-003 · Confirm 真扣减', 'run');
+    emit('tc', '三分支 Try 全部成功 → TC 二阶段 Confirm：真扣减。', 7);
+    for (const id of rmRegister) {
+      metrics.commits++;
+      setBranch(id, 'Confirm ✓', 'ok', '真扣减完成');
+      chip(`${id} Confirm ✓`, 'ok');
+      flash(`✓ ${id} Confirm`, 'ok');
+      emit('tcc', `${id}：Confirm 扣减完成（提交 ${metrics.commits}/3）。`, 7);
+    }
+    phase('TX-004 · Try 再失败', 'warn');
+    emit('tm', '下一笔 TX-004：这次账户在 Try 阶段就冻结失败。', 6);
+    metrics.globals++;
+    items.xid = 'TX-004';
+    emit('tc', 'TC 生成全局 XID = TX-004（全局 2/2）。', 1);
+    for (const id of ['rm1 · 订单', 'rm2 · 库存']) {
+      metrics.branches++;
+      setBranch(id, 'Try 预留 ✓', 'warn', '资源已冻结');
+      flash(`✓ ${id} Try 冻结成功`, 'ok');
+      emit('tcc', `${id}：Try 冻结成功（分支 ${metrics.branches}/5）。`, 6);
+    }
+    setBranch('rm3 · 账户', 'Try ✗', 'bad', '余额不足 · 冻结失败');
+    flash('rm3 Try 失败 → 触发 Cancel', 'bad');
+    emit('tcc', 'rm3 · 账户：Try 冻结失败（余额不足）→ 不进入二阶段；全局回滚 = Cancel 其余已 Try 的分支。', 7);
+    phase('TX-004 · Cancel 解冻', 'run');
+    emit('tc', 'TC 二阶段 Cancel：已 Try 的订单、库存做业务补偿（解冻）；从未 Try 成功的账户无需动作。', 7);
+    for (const id of ['rm1 · 订单', 'rm2 · 库存']) {
+      metrics.rollbacks++;
+      setBranch(id, 'Cancel 解冻', 'bad', '业务补偿完成');
+      chip(`${id} Cancel ✓`, 'bad');
+      flash(`↺ ${id} Cancel 解冻`, 'bad');
+      emit('tcc', `${id}：Cancel 业务补偿（回滚 ${metrics.rollbacks}/2）。`, 7);
+    }
+    phase('TCC 演示完成', 'ok');
+    emit('tm', `运行结束：全局 ${metrics.globals} · 分支 ${metrics.branches} · 提交 ${metrics.commits} · 回滚 ${metrics.rollbacks} · undo ${metrics.undos}——AT 的补偿 = undo_log 镜像回放；TCC 的补偿 = 业务 Cancel 接口，全程没有 undo_log。`, 0);
+  }
+  return frames;
+}
+function zab(p) {
+  const scenario = p.scenario || 'broadcast';
+  const sceneTag = { broadcast: '① 广播 · 两阶段提交写', crash: '② Leader 崩溃 · 选主', recovery: '③ 恢复 · 新纪元与日志同步' }[scenario];
+  const frames = [];
+  const metrics = { writes: 0, acks: 0, commits: 0, elections: 0, discarded: 0, synced: 0 };
+  const items = { mode: scenario, phase: null, roles: [], chips: [], flash: null };
+  const emit = (active, message, code) => snapshot(frames, { active, message, code, metrics, items });
+  const flash = (t, st) => { items.flash = { t, st }; };
+  const phase = (txt, st) => { items.phase = { txt, st }; };
+  const chip = (t, st) => items.chips.push({ t, st });
+  const setRole = (id, txt, st) => {
+    const found = items.roles.find(r => r.id === id);
+    if (found) { found.txt = txt; found.st = st; } else { items.roles.push({ id, txt, st }); }
+  };
+  const broadcast = (t, seq) => {
+    metrics.writes++;
+    emit('propose', `${t}：Leader A 把写请求编码为 Proposal (e1,${seq}) 广播给 B、C。`, 0);
+    metrics.acks++;
+    emit('follower', `${t}：B ACK——已落日志，回执给 A。`, 1);
+    metrics.acks++;
+    emit('follower', `${t}：C ACK——已落日志，回执给 A。`, 1);
+    metrics.commits++;
+    chip(`${t} (e1,${seq})`, 'ok');
+    flash(`✓ ${t} 提交 · A+B+C = 3/3`, 'ok');
+    emit('quorum', `过半确认（ACK ${metrics.acks}/6）→ A 提交并广播 COMMIT（提交 ${metrics.commits}/3）——FIFO 序号：先提出先提交。`, 1);
+  };
+  emit('leader', `ZAB 协议教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (scenario === 'broadcast') {
+    phase('e1 · 广播与多数派', 'run');
+    setRole('A', 'A · e1 Leader', 'ok');
+    setRole('B', 'B · e1 Follower', 'ok');
+    setRole('C', 'C · e1 Follower', 'ok');
+    emit('leader', 'A 为 e1 纪元 Leader，B/C 为 Follower。客户端把写请求发给 A。', 0);
+    broadcast('T1', 1);
+    broadcast('T2', 2);
+    broadcast('T3', 3);
+    emit('leader', `运行结束：写 ${metrics.writes} · ACK ${metrics.acks} · 提交 ${metrics.commits} · 选主 ${metrics.elections} · 丢弃 ${metrics.discarded} · 追平 ${metrics.synced}——每条 Proposal = 2 个 Follower ACK + Leader 自己 = 3/3 过半；提交顺序 = FIFO 序号顺序，客户端看到全局一致。`, 2);
+  } else if (scenario === 'crash') {
+    phase('e1 · T1 正常提交', 'run');
+    setRole('A', 'A · e1 Leader', 'ok');
+    setRole('B', 'B · e1 Follower', 'ok');
+    setRole('C', 'C · e1 Follower', 'ok');
+    emit('leader', 'A 为 e1 Leader。先看一笔正常的写，再让 Leader 在「未过半」时崩溃。', 0);
+    metrics.writes++;
+    emit('propose', 'T1：Proposal (e1,1) 广播。', 0);
+    metrics.acks++;
+    emit('follower', 'B ACK T1。', 1);
+    metrics.acks++;
+    emit('follower', 'C ACK T1。', 1);
+    metrics.commits++;
+    chip('T1 (e1,1)', 'ok');
+    flash('✓ T1 提交 · A+B+C = 3/3', 'ok');
+    emit('quorum', '过半（ACK 2/4）→ T1 提交（提交 1/2）——已进入「过半集合」的事务，之后无论怎么切换都安全。', 1);
+    phase('T2 · ACK 未过半 · A 崩溃', 'warn');
+    metrics.writes++;
+    emit('propose', 'T2：Proposal (e1,2) 广播。', 0);
+    metrics.acks++;
+    emit('follower', 'B ACK T2（ACK 3/4）——B 的日志里有 T1 + T2。', 1);
+    setRole('A', 'A · 宕机', 'down');
+    flash('A 崩溃 · C 的 ACK 永远到不了', 'bad');
+    emit('follower', 'C 的 ACK 还在路上……A 先崩了：T2 停在「只有 B 一票」的状态。', 3);
+    phase('选举 · e2', 'warn');
+    emit('epoch', 'B、C 失联检测 → 进入选举：比较日志新旧——B 含 T1+T2（zxid 领先 C 的 T1）→ B 得多数票。', 3);
+    metrics.elections++;
+    setRole('B', 'B · e2 Leader', 'ok');
+    flash('B 当选 e2 Leader', 'ok');
+    emit('epoch', 'B 成为 e2 纪元 Leader（选主 1/1）。新纪元的先决条件：已提交事务必然在 B 的日志里。', 4);
+    metrics.discarded++;
+    phase('e2 · 丢弃未提交', 'bad');
+    flash('T2 丢弃 · 从未提交', 'bad');
+    emit('recovery', '新纪元只承认已提交（过半）历史：T2 只有 B 一票、未过半 → 从未真正提交 → 丢弃（丢弃 1/1）——丢的不是已提交数据。', 5);
+    phase('e2 · 新 Leader 续写', 'run');
+    metrics.writes++;
+    emit('propose', 'T3：新 Leader B 广播 Proposal (e2,1)。', 0);
+    metrics.acks++;
+    emit('follower', 'C ACK T3（ACK 4/4）→ B+C = 2/3 过半。', 1);
+    metrics.commits++;
+    chip('T3 (e2,1)', 'ok');
+    flash('✓ T3 提交 · B+C = 2/3', 'ok');
+    emit('quorum', '过半 → B 提交并广播 COMMIT（提交 2/2）——新纪元只需要一票凑成多数派。', 1);
+    emit('leader', `运行结束：写 ${metrics.writes} · ACK ${metrics.acks} · 提交 ${metrics.commits} · 选主 ${metrics.elections} · 丢弃 ${metrics.discarded} · 追平 ${metrics.synced}——T1、T3 进入过半集合；T2 从未达到提交判据：切换丢的是「假提交」，不是已提交事务。`, 0);
+  } else {
+    phase('e1 · T1 提交后崩溃', 'run');
+    setRole('A', 'A · e1 Leader', 'ok');
+    setRole('B', 'B · e1 Follower', 'ok');
+    setRole('C', 'C · e1 Follower', 'ok');
+    emit('leader', 'A 为 e1 Leader。这一场：A 在 T1 正常提交后崩溃，B/C 日志等长——考验 myid 决胜与旧主回归。', 0);
+    metrics.writes++;
+    emit('propose', 'T1：Proposal (e1,1) 广播。', 0);
+    metrics.acks++;
+    emit('follower', 'B ACK T1。', 1);
+    metrics.acks++;
+    emit('follower', 'C ACK T1。', 1);
+    metrics.commits++;
+    chip('T1 (e1,1)', 'ok');
+    flash('✓ T1 提交 · A+B+C = 3/3', 'ok');
+    emit('quorum', '过半（ACK 2/4）→ T1 提交（提交 1/3）——此刻 A 崩溃。', 1);
+    phase('选举 · B/C 日志等长', 'warn');
+    setRole('A', 'A · 宕机', 'down');
+    flash('A 崩溃 · T1 已安全提交', 'bad');
+    emit('epoch', 'A 崩溃：B、C 都只有 T1，日志等长 → zxid 相同，按 myid 决胜。', 3);
+    metrics.elections++;
+    setRole('B', 'B · e2 Leader', 'ok');
+    flash('B 当选 · myid 更大', 'ok');
+    emit('epoch', 'B 的 myid 更大 → 赢得 C 的选票，e2 纪元开始（选主 1/1）。', 4);
+    phase('e2 · T2/T3 提交', 'run');
+    metrics.writes++;
+    emit('propose', 'T2：Proposal (e2,1) 广播。', 0);
+    metrics.acks++;
+    emit('follower', 'C ACK T2（ACK 3/4）→ B+C 过半。', 1);
+    metrics.commits++;
+    chip('T2 (e2,1)', 'ok');
+    flash('✓ T2 提交 · B+C = 2/3', 'ok');
+    emit('quorum', '过半 → 提交 T2（提交 2/3）。', 1);
+    metrics.writes++;
+    emit('propose', 'T3：Proposal (e2,2) 广播。', 0);
+    metrics.acks++;
+    emit('follower', 'C ACK T3（ACK 4/4）→ B+C 过半。', 1);
+    metrics.commits++;
+    chip('T3 (e2,2)', 'ok');
+    flash('✓ T3 提交 · B+C = 2/3', 'ok');
+    emit('quorum', '过半 → 提交 T3（提交 3/3）。', 1);
+    phase('A 回归 · follower 追平', 'run');
+    setRole('A', 'A · e2 Follower 同步中', 'warn');
+    flash('A 复活 · 纪元落后', 'warn');
+    emit('recovery', 'A 回归：日志停在 e1（缺 T2/T3）→ 纪元落后、无竞选资格 → 以 follower 身份向新 Leader B 拉取日志。', 6);
+    metrics.synced++;
+    setRole('A', 'A · e2 Follower', 'ok');
+    flash('A 追平全部日志', 'ok');
+    emit('recovery', 'A 向 B 拉齐 T1+T2+T3（追平 1/1）——已提交事务一条不丢：切主退化成一次普通日志复制。', 6);
+    emit('leader', `运行结束：写 ${metrics.writes} · ACK ${metrics.acks} · 提交 ${metrics.commits} · 选主 ${metrics.elections} · 丢弃 ${metrics.discarded} · 追平 ${metrics.synced}——新 Leader 日志必然包含全部已提交事务；回归的旧主只能当 follower 追平。`, 0);
+  }
+  return frames;
+}
 function jvm(p) {
   const frames = [];
   let eden = [];
@@ -1928,7 +3544,7 @@ function jvm(p) {
   }
   return frames;
 }
-const runners = { redis, threadpool, hashmap, kafka, 'kafka-replication': kafkaReplication, 'kafka-eos': kafkaEos, mysql, 'mysql-isolation': mysqlIsolation, 'mysql-crash': mysqlCrash, 'concurrent-hashmap': concurrentHashmap, 'mysql-lock': mysqlLock, 'rabbitmq-exchange': rabbitmqExchange, 'rabbitmq-ack': rabbitmqAck, 'rocketmq-tx': rocketmqTx, 'rocketmq-ordered': rocketmqOrdered, 'juc-coordination': jucCoordination, 'sync-lock': syncLock, 'aqs-queue': aqsQueue, 'zookeeper-leader': zookeeperLeader, 'es-inverted': esInverted, 'volatile-jmm': volatileJmm, 'nacos-registry': nacosRegistry, 'netty-eventloop': nettyEventLoop, 'nacos-config': nacosConfig, 'mysql-replication': mysqlReplication, 'es-sharding': esSharding, 'es-write': esWrite, jvm, ...redisRunners, ...jvmRunners };
+const runners = { redis, threadpool, hashmap, kafka, 'kafka-replication': kafkaReplication, 'kafka-eos': kafkaEos, 'kafka-consumer': kafkaConsumer, 'kafka-storage': kafkaStorage, mysql, 'mysql-isolation': mysqlIsolation, 'mysql-crash': mysqlCrash, 'concurrent-hashmap': concurrentHashmap, 'mysql-lock': mysqlLock, 'rabbitmq-exchange': rabbitmqExchange, 'rabbitmq-ack': rabbitmqAck, 'rabbitmq-cluster': rabbitmqCluster, 'rocketmq-tx': rocketmqTx, 'rocketmq-ordered': rocketmqOrdered, 'rocketmq-dledger': rocketmqDledger, 'juc-coordination': jucCoordination, 'sync-lock': syncLock, 'aqs-queue': aqsQueue, 'zookeeper-leader': zookeeperLeader, 'es-inverted': esInverted, 'volatile-jmm': volatileJmm, 'nacos-registry': nacosRegistry, 'netty-eventloop': nettyEventLoop, 'nacos-config': nacosConfig, 'zk-lock': zkLock, 'seata-tx': seataTx, zab, 'mysql-replication': mysqlReplication, 'es-sharding': esSharding, 'es-write': esWrite, jvm, 'function-calling': functionCalling, 'threadlocal-leak': threadlocalLeak, 'blocking-queue': blockingQueue, 'cas-atomic': casAtomic, 'completable-future': completableFuture, 'mysql-sharding': mysqlSharding, 'mysql-explain': mysqlExplain, 'es-query': esQuery, ...redisRunners, ...jvmRunners, ...agentRunners };
 export function simulate(id, params) {
   if (!runners[id]) throw new Error(`Unknown lab: ${id}`);
   return runners[id](params);

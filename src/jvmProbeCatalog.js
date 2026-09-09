@@ -6,4 +6,5 @@ export const jvmProbeCatalog = {
   'jvm-roots': { probe: 'references', title: '弱引用回收观测', objective: '移除强引用后请求 GC，观察 WeakReference 与 ReferenceQueue。', evidence: ['可能观察到弱引用被清除', 'System.gc 只是请求，结果允许未立即回收'], boundary: '不生成 heap dump，不能枚举真实 GC Roots；单次未回收也不表示对象永远存活。' },
   jvm: { probe: 'gc', title: '实际垃圾收集器指标', objective: '读取 GarbageCollectorMXBean 的收集器名称、累计次数和耗时。', evidence: ['名称取决于当前 JDK 与启动参数', 'count/time 是网关 JVM 启动后的累计值'], boundary: 'MXBean 累计指标不是某一次课程演示的独立耗时，也不区分所有停顿阶段。' },
   'jvm-collectors': { probe: 'gc', title: '识别当前 JVM 收集器', objective: '读取当前网关 JVM 的 GarbageCollectorMXBean 名称、累计次数和耗时。', evidence: ['收集器名称来自当前 JVM，而不是前端推测', '一次网关进程只证明当前启动配置'], boundary: '该探针不会切换 JVM 启动参数，也不产生 Serial、Parallel、G1 的横向性能基准。' },
+  'jvm-jit': { probe: 'runtime', title: '解释器 / 编译模式实读', objective: '读取 java.version、java.vm.name 与混合执行模式（Mixed）等运行时事实。', evidence: ['输出包含 HotSpot 与解释器模式（Mixed）字样', 'CompilationPolicy 由当前 JVM 而非前端推断'], boundary: '不读取 CompilationMXBean 编译计数，也不修改任何启动参数来制造编译事件。' },
 };

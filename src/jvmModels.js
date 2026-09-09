@@ -136,6 +136,80 @@ function collectors(p) {
   return frames;
 }
 
+function jit(p) {
+  const mode = p.mode || 'tiered';
+  const calls = p.calls ?? 600;
+  const threshold = p.threshold ?? 200;
+  const inlineOn = p.inline ?? true;
+  const escapeOn = p.escape ?? true;
+  const frames = [];
+  const metrics = { interpreted: 0, c1: 0, c2: 0, inlined: 0, escapes: 0 };
+  const items = [];
+  const sceneTag = mode === 'inline' ? '② 内联与逃逸分析' : mode === 'flags' ? '③ 编译参数 · 门槛对比' : '① 分级编译 · 阈值与热度';
+  const label = mode === 'inline' ? 'INLINE + ESCAPE' : mode === 'flags' ? 'THRESHOLD COMPARE' : 'COMPILE TRACE';
+  const emit = (active, message, code) => snapshot(frames, active, message, code, metrics, items, label);
+  emit('call', `JIT 热点编译教学模型就绪：场景「${sceneTag}」。`, 0);
+  if (mode === 'tiered') {
+    const interp = Math.min(calls, 300);
+    metrics.interpreted = interp;
+    items.push(`调用 1–${interp} · 解释执行`);
+    emit('interp', `前 ${interp} 次调用由解释器执行并收集 profile（解释 ${interp}/${calls}）。`, 1);
+    if (calls >= 300) {
+      emit('c1', '第 300 次调用越过 C1 阈值：方法被编译为 C1 快速编译代码——编译在调用边界之后生效。', 2);
+      if (calls > 300) {
+        const c1 = Math.min(calls, 600) - 300;
+        metrics.c1 = c1;
+        items.push(`调用 301–${300 + c1} · C1 编译执行`);
+        emit('c1', `第 301~${300 + c1} 次在 C1 编译代码上执行（C1 ${c1}）。`, 3);
+      }
+      if (calls > 600) {
+        emit('c2', '第 600 次调用越过 C2 阈值：触发 C2 深度优化——更激进的内联与标量替换。', 2);
+        metrics.c2 = calls - 600;
+        items.push(`调用 601–${calls} · C2 深度优化`);
+        emit('c2', `第 601~${calls} 次在 C2 优化代码上执行（C2 ${calls - 600}）。`, 3);
+      }
+    }
+    emit('call', `运行结束：解释 ${metrics.interpreted} · C1 ${metrics.c1} · C2 ${metrics.c2}——编译发生在越过阈值的下一次调用：热度决定执行方式，调低阈值只提前切换、不改变峰值收益。`, 0);
+  } else if (mode === 'inline') {
+    metrics.c2 = calls;
+    items.push(`调用 1–${calls} · C2 编译入口`);
+    emit('c2', `方法早已越过 C2 阈值：入口是 C2 编译代码，${calls} 次调用全程不经解释器（C2 ${calls}）。`, 0);
+    if (inlineOn) {
+      metrics.inlined = 2;
+      items.push('内联 2 个调用点 · 无调用开销');
+      emit('inline', 'C2 依据 profile 内联 2 个调用点：order() 与 price() 被展开到方法体内——调用与栈帧开销消失（内联调用点 2）。', 3);
+    } else {
+      items.push('内联关闭 · 保留真实调用');
+      emit('inline', '内联开关关闭：两个调用点保持真实方法调用——每次调用都付出调用与栈帧开销（内联调用点 0）。', 3);
+    }
+    if (escapeOn) {
+      metrics.escapes = calls;
+      items.push(`${calls} 个 Order 未逃逸 · 标量替换`);
+      emit('alloc', `每次调用创建 Order：分析确认对象不逃逸出方法 → 字段直接拆分到寄存器或栈（标量替换 ${calls}）——零堆分配、零 GC 压力。`, 4);
+    } else {
+      items.push(`${calls} 个 Order 逃逸 · 堆分配`);
+      emit('alloc', `逃逸分析关闭：Order 走普通堆分配——${calls} 个对象进入堆，随后由 GC 回收（标量替换 0）。`, 4);
+    }
+    emit('call', `运行结束：解释 0 · C1 0 · C2 ${metrics.c2} · 内联 ${metrics.inlined} · 标量替换 ${metrics.escapes}——内联消除调用开销、标量替换消除堆分配：两者都依赖 C2 画像成立，画像失效会触发去优化。`, 0);
+  } else {
+    metrics.interpreted = calls;
+    items.push(`Pass A · JVM 默认阈值 1000 · 解释 ${calls}`);
+    emit('call', `Pass A：JVM 默认 -XX:CompileThreshold=1000——调用 ${calls} 次未达门槛，一次编译都不发生：全程解释执行（解释 ${calls}）。`, 1);
+    if (calls > threshold) {
+      metrics.interpreted = calls + threshold;
+      metrics.c1 = calls - threshold;
+      items.push(`Pass B · -XX:CompileThreshold=${threshold} · C1 ${calls - threshold}`);
+      emit('c1', `Pass B：调低到 -XX:CompileThreshold=${threshold}——前 ${threshold} 次仍解释，第 ${threshold + 1} 次起由 C1 编译代码执行（累计解释 ${calls + threshold} · C1 ${calls - threshold}）。`, 2);
+    } else {
+      metrics.interpreted = calls + calls;
+      items.push(`Pass B · -XX:CompileThreshold=${threshold} · 仍全部解释`);
+      emit('interp', `Pass B：-XX:CompileThreshold=${threshold} 未低于调用次数 → 依旧全程解释（累计解释 ${calls + calls}）——门槛没有被越过，调参没有收益。`, 2);
+    }
+    emit('call', `运行结束：解释 ${metrics.interpreted} · C1 ${metrics.c1} · C2 0——调低门槛让方法更早进入 C1：收益是提前切到编译代码，代价是 C1 编译本身占用启动期 CPU。`, 0);
+  }
+  return frames;
+}
+
 export const jvmRunners = {
   'jvm-bytecode': bytecode,
   'jvm-classloading': classloading,
@@ -143,4 +217,5 @@ export const jvmRunners = {
   'jvm-allocation': allocation,
   'jvm-roots': roots,
   'jvm-collectors': collectors,
+  'jvm-jit': jit,
 };

@@ -104,4 +104,19 @@ export const jvmDeepDives = {
     answer: '订单接口用接近生产的流量和对象生命周期比较停顿 P95/P99、吞吐、CPU、分配与晋升率，并检查容器限额；报表任务优先比较总完成时间和 CPU 利用率。两者都要固定 JDK、堆参数、预热和数据集，多轮运行后再决策。',
     links: [['Oracle 可用收集器', 'https://docs.oracle.com/en/java/javase/21/gctuning/available-collectors.html'], ['Oracle G1 调优', 'https://docs.oracle.com/en/java/javase/21/gctuning/garbage-first-garbage-collector-tuning.html']],
   },
+  'jvm-jit': {
+    question: '同一个 sum 循环跑了前几次还是解释执行，为什么跑热之后反而“换了一种执行方式”？',
+    scenario: 'loop 内的热方法被调用 600 次以上时，解释器仍在逐条翻译字节码，而 JIT 已把调用点编译成机器码：计数阈值、C1/C2 分级与内联共同决定“哪一次调用开始变快”。',
+    chain: [
+      ['先解释再编译：计数阈值决定分界', 'HotSpot 解释器为每个方法维护调用计数：超过 -XX:CompileThreshold 才排队编译。客户端模式下 C1 用较低的阈值快速编译；服务端模式（分层编译）先 C1 带 profiling 的版本，再在计数更高时升级 C2。低于阈值的方法可能永远停留在解释执行。'],
+      ['内联消除调用本身的成本', '热方法通常不大，JIT 会把被调方法体直接拼进调用方——省去参数传递、栈帧与跳转。内联决策依赖方法大小与调用热度；-XX:InlineSmallCode、-XX:FreqInlineSize 等参数约束什么方法值得内联。'],
+      ['逃逸分析把对象分配到栈上或拆散', '若新建对象没有“逃逸”出方法（未返回、未存进堆、未传给别的线程），JIT 可把它标量替换成若干局部变量或做锁消除——分配计数减少，但不是每次都生效：逃逸路径、volatile、反射都会让分析放弃。'],
+    ],
+    headers: ['引擎状态', '正在发生什么', '观测到的特征'],
+    rows: [['解释执行', '逐条翻译字节码，不做 profiling 假设', '调用计数低于阈值，单次开销稳定但偏慢'], ['C1 分层编译', '带 profiling 的快速机器码，边跑边收集类型/分支信息', '方法一旦越过 C1 阈值，热路径换成机器码执行'], ['C2 深度优化', '利用 profiling 做内联、逃逸分析、循环优化', '越热的方法可能被内联进调用方，不再有独立调用帧']],
+    misconception: '“JIT 编译是一劳永逸的切换”不成立。解释、C1、C2 之间是分层状态机：会先解释再按热度升级，也会因类卸载、去优化（deoptimize）回到解释层重新收集信息。',
+    transfer: '线上 CPU 火焰图里，一个日志拼接方法占用很高，改小调用次数没用；你会用哪些 JVM 参数或日志证据判断它是没被编译、没被内联还是真的工作量巨大？',
+    answer: '先确认它确实热（调用计数越过阈值）再看编译产物：-XX:+PrintCompilation 观察是否出现该方法的编译记录与层级，-XX:+PrintInlining 看内联决策与失败原因（方法过大、接口调用、编译时间过长等）；再用 -XX:+UnlockDiagnosticVMOptions -XX:+PrintAssembly 看机器码。若根本没有编译记录，问题更可能是编译阈值或请求本身，而不是 JIT 决策。',
+    links: [['HotSpot 性能增强', 'https://docs.oracle.com/en/java/javase/21/vm/java-hotspot-virtual-machine-performance-enhancements.html'], ['java 命令行选项', 'https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html']],
+  },
 };

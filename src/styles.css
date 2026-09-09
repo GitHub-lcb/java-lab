@@ -69,6 +69,10 @@ svg { flex-shrink: 0; }
 .course-item.planned:hover { background: transparent; color: var(--faint); }
 .course-item.planned > svg { opacity: .65; }
 .course-item.planned .planned-badge { flex: none; margin-left: auto; color: var(--muted); font: 9px 'IBM Plex Mono', 'Microsoft YaHei', monospace; border: 1px dashed var(--line); border-radius: 3px; padding: 1px 5px; }
+.course-item > svg.row-mastered { color: var(--accent); }
+.course-item > svg.row-done { color: #d4b876; }
+.planned-legend { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; color: var(--faint); font: 9px 'IBM Plex Mono', 'Microsoft YaHei', monospace; padding: 2px 8px 13px; }
+.planned-legend em { font-style: normal; color: var(--muted); border: 1px dashed var(--line); border-radius: 3px; padding: 0 4px; }
 .sidebar-bottom { flex-shrink: 0; padding: 18px 7px 0; margin-top: auto; background: var(--panel); }
 .learning-progress { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
 .learning-progress > svg { color: var(--accent); }
@@ -339,6 +343,7 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 .phase-heading { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 9px; }
 .phase-heading h4 { font-size: 11px; font-weight: 550; }
 .phase-heading span { color: var(--muted); font: 9px 'IBM Plex Mono', monospace; }
+.path-phase > .planned-note { display: block; color: var(--faint); font: 9px 'IBM Plex Mono', 'Microsoft YaHei', monospace; padding: 9px 2px 0; }
 .path-lessons { display: grid; }
 .path-lessons > button { display: flex; align-items: center; gap: 13px; min-height: 59px; padding: 9px 5px; text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .path-lessons > button:hover { background: color-mix(in srgb, var(--raised) 65%, transparent); }

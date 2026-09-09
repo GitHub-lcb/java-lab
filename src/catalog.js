@@ -77,7 +77,7 @@ export const labs = [
     source: 'https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/AbstractQueuedSynchronizer.html',
   },
   {
-    id: 'volatile-jmm', group: 'Java 核心', title: 'volatile 与内存可见性', short: 'volatile 与 JMM', icon: 'ShieldAlert', tag: '并发编程', number: '14',
+    id: 'volatile-jmm', group: 'Java 核心', title: 'volatile 与内存可见性', short: 'volatile 与 JMM', icon: 'ShieldAlert', tag: '并发编程', number: '05',
     summary: '一个线程的写入另一个线程何时能看到？volatile 保证可见性与禁止重排，却管不了 i++ 的原子性——三个场景逐一演示 JMM 三条经典语义。',
     defaults: { scenario: 'visible' },
     fields: [{ key: 'scenario', label: '并发问题场景', type: 'select', options: [['visible', '① 可见性 · 普通字段 vs volatile'], ['order', '② 指令重排 · 双重检查锁'], ['atomic', '③ 原子性 · volatile 的局限']] }],
@@ -99,7 +99,7 @@ export const labs = [
   ...jvmLabs,
   ...redisLabs,
   {
-    id: 'mysql', group: '数据与缓存', title: 'MySQL 索引查询', short: 'MySQL 索引查询', icon: 'Network', tag: '数据库原理', number: '05',
+    id: 'mysql', group: '数据与缓存', title: 'MySQL 索引查询', short: 'MySQL 索引查询', icon: 'Network', tag: '数据库原理', number: '01',
     summary: '对比索引定位与全表扫描，观察 B+ 树叶子页和记录的访问路径。',
     defaults: { indexed: true, target: 42 },
     fields: [{ key: 'target', label: '查询 ID', min: 1, max: 64, unit: '' }, { key: 'indexed', label: '使用主键索引', type: 'toggle' }],
@@ -112,7 +112,7 @@ export const labs = [
     source: 'https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html',
   },
   {
-    id: 'mysql-isolation', group: '数据与缓存', title: 'MySQL 事务与隔离级别', short: 'MySQL 事务与隔离', icon: 'Table2', tag: '数据库原理', number: '06',
+    id: 'mysql-isolation', group: '数据与缓存', title: 'MySQL 事务与隔离级别', short: 'MySQL 事务与隔离', icon: 'Table2', tag: '数据库原理', number: '02',
     summary: '运行同一幕并发脚本，切换隔离级别观察脏读、不可重复读、幻读与锁等待的消长。',
     defaults: { isolation: 'repeatable' },
     fields: [{ key: 'isolation', label: '隔离级别', type: 'select', options: [['uncommitted', '读未提交 READ UNCOMMITTED'], ['committed', '读已提交 READ COMMITTED'], ['repeatable', '可重复读 REPEATABLE READ'], ['serializable', '串行化 SERIALIZABLE']] }],
@@ -131,7 +131,7 @@ export const labs = [
     source: 'https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html',
   },
   {
-    id: 'es-inverted', group: '数据与缓存', title: 'Elasticsearch 分词与倒排索引', short: 'ES 倒排索引', icon: 'Search', tag: '搜索引擎', number: '13',
+    id: 'es-inverted', group: '数据与缓存', title: 'Elasticsearch 分词与倒排索引', short: 'ES 倒排索引', icon: 'Search', tag: '搜索引擎', number: '03',
     summary: '写入的文档怎么变成词项表？match 与 match_phrase 的差距在哪？更新与删除又是如何维护倒排索引的——跟着 term → postings 走一遍。',
     defaults: { scenario: 'match' },
     fields: [{ key: 'scenario', label: '索引操作场景', type: 'select', options: [['match', '① match 查询 · 倒排构建'], ['phrase', '② match_phrase · 位置与词序'], ['update', '③ 文档更新删除 · 倒排维护']] }],
@@ -150,7 +150,7 @@ export const labs = [
     source: 'https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-overview.html',
   },
   {
-    id: 'kafka', group: '消息中间件', title: 'Kafka 分区与消费组', short: 'Kafka 分区消费', icon: 'Waypoints', tag: '消息队列', number: '07',
+    id: 'kafka', group: '消息中间件', title: 'Kafka 分区与消费组', short: 'Kafka 分区消费', icon: 'Waypoints', tag: '消息队列', number: '01',
     summary: '观察消息写入分区、消费组分配和 offset 推进之间的关系。',
     defaults: { partitions: 3, consumers: 2, messages: 9 },
     fields: [{ key: 'partitions', label: 'Topic 分区数', min: 1, max: 6, unit: '个' }, { key: 'consumers', label: '消费组成员数', min: 1, max: 6, unit: '个' }, { key: 'messages', label: '发送消息数', min: 1, max: 15, unit: '条' }],
@@ -163,7 +163,7 @@ export const labs = [
     source: 'https://kafka.apache.org/documentation/#intro_consumers',
   },
   {
-    id: 'kafka-replication', group: '消息中间件', title: 'Kafka 副本与 ISR', short: 'Kafka 副本与 ISR', icon: 'Layers', tag: '消息队列', number: '08',
+    id: 'kafka-replication', group: '消息中间件', title: 'Kafka 副本与 ISR', short: 'Kafka 副本与 ISR', icon: 'Layers', tag: '消息队列', number: '02',
     summary: '调整 acks 与 min.insync.replicas，观察 Leader 崩溃前后确认、复制与丢失的关系。',
     defaults: { acks: 'all', replicas: 3, minIsr: 2, messages: 5, crashAfter: 3 },
     fields: [
@@ -188,7 +188,7 @@ export const labs = [
     source: 'https://kafka.apache.org/documentation/#design_ha',
   },
   {
-    id: 'rabbitmq-exchange', group: '消息中间件', title: 'RabbitMQ 交换机与路由', short: 'RabbitMQ 路由', icon: 'Route', tag: '消息队列', number: '09',
+    id: 'rabbitmq-exchange', group: '消息中间件', title: 'RabbitMQ 交换机与路由', short: 'RabbitMQ 路由', icon: 'Route', tag: '消息队列', number: '03',
     summary: '同一条消息在直连、主题与扇出交换机下，如何按绑定规则进入队列或被丢弃？',
     defaults: { exchange: 'topic' },
     fields: [{ key: 'exchange', label: '交换机类型', type: 'select', options: [['direct', '直连 DIRECT'], ['topic', '主题 TOPIC'], ['fanout', '扇出 FANOUT']] }],
@@ -207,7 +207,7 @@ export const labs = [
     source: 'https://www.rabbitmq.com/docs/exchanges',
   },
   {
-    id: 'rabbitmq-ack', group: '消息中间件', title: 'RabbitMQ 消费确认与死信队列', short: 'RabbitMQ ack 与死信', icon: 'Recycle', tag: '消息队列', number: '10',
+    id: 'rabbitmq-ack', group: '消息中间件', title: 'RabbitMQ 消费确认与死信队列', short: 'RabbitMQ ack 与死信', icon: 'Recycle', tag: '消息队列', number: '04',
     summary: '同一幕消息，自动确认与手动确认下失败消息的两种结局：静默丢失，还是重试后进入死信队列？',
     defaults: { autoAck: false, maxRetry: 3 },
     fields: [{ key: 'autoAck', label: '自动确认 autoAck', type: 'toggle' }, { key: 'maxRetry', label: '失败重试上限', min: 1, max: 4, unit: '次' }],
@@ -226,7 +226,7 @@ export const labs = [
     source: 'https://www.rabbitmq.com/docs/dlx',
   },
   {
-    id: 'rocketmq-tx', group: '消息中间件', title: 'RocketMQ 事务消息与最终一致', short: 'RocketMQ 事务消息', icon: 'RefreshCw', tag: '消息队列', number: '11',
+    id: 'rocketmq-tx', group: '消息中间件', title: 'RocketMQ 事务消息与最终一致', short: 'RocketMQ 事务消息', icon: 'RefreshCw', tag: '消息队列', number: '05',
     summary: '半消息先入 Broker、本地事务后执行——Commit 让消息转正可见，Rollback 让消息消失，谁都没表态就靠回查兜底。',
     defaults: { scenario: 'commit' },
     fields: [{ key: 'scenario', label: '本地事务结局', type: 'select', options: [['commit', '① 事务成功 → Commit 转正'], ['rollback', '② 业务失败 → Rollback 丢弃'], ['unknown', '③ 确认丢失 → Broker 回查']] }],
@@ -245,7 +245,7 @@ export const labs = [
     source: 'https://rocketmq.apache.org/docs/featureBehavior/04transactionmessage',
   },
   {
-    id: 'zookeeper-leader', group: '分布式协调', title: 'ZooKeeper Leader 选举与防脑裂', short: 'ZooKeeper 选举', icon: 'Server', tag: '分布式协调', number: '12',
+    id: 'zookeeper-leader', group: '分布式协调', title: 'ZooKeeper Leader 选举与防脑裂', short: 'ZooKeeper 选举', icon: 'Server', tag: '分布式协调', number: '01',
     summary: 'Leader 宕机谁接班？从 LOOKING 状态出发，看 (zxid, myid) 投票如何过半收敛，以及少数派为什么永远选不出新 Leader——脑裂被机制禁止。',
     defaults: { scenario: 'crash-recovery' },
     fields: [{ key: 'scenario', label: '集群故障场景', type: 'select', options: [['crash-recovery', '① Leader 宕机 · 崩溃恢复'], ['partition', '② 网络分区 · 防脑裂'], ['follower-down', '③ Follower 宕机 · 无需选举']] }],
@@ -264,7 +264,7 @@ export const labs = [
     source: 'https://zookeeper.apache.org/doc/current/zookeeperInternals.html#sc_leaderElection',
   },
   {
-    id: 'nacos-registry', group: '分布式协调', title: 'Nacos 服务注册与发现', short: 'Nacos 注册中心', icon: 'Activity', tag: '微服务治理', number: '15',
+    id: 'nacos-registry', group: '分布式协调', title: 'Nacos 服务注册与发现', short: 'Nacos 注册中心', icon: 'Activity', tag: '微服务治理', number: '02',
     summary: '一个服务怎么让别的服务找到自己？注册、心跳、订阅三件事：实例上线登记目录、5 秒心跳续约租约、消费者靠全量拉取 + UDP/长轮询双通道感知每一次上下线。',
     defaults: { scenario: 'register' },
     fields: [{ key: 'scenario', label: '注册中心场景', type: 'select', options: [['register', '① 注册与心跳 · 实例上线'], ['subscribe', '② 订阅与推送 · 扩缩容感知'], ['deregister', '③ 下线与剔除 · 心跳超时']] }],
@@ -284,7 +284,7 @@ export const labs = [
     source: 'https://nacos.io/',
   },
   {
-    id: 'netty-eventloop', group: 'Java 核心', title: 'Netty 事件循环与线程模型', short: 'Netty 线程模型', icon: 'Network', tag: '网络编程', number: '16',
+    id: 'netty-eventloop', group: 'Java 核心', title: 'Netty 事件循环与线程模型', short: 'Netty 线程模型', icon: 'Network', tag: '网络编程', number: '06',
     summary: '百万连接真靠百万线程？Netty 用主从 Reactor 两拨线程吃下全部：boss 只接客、连接轮询分发后绑定固定 worker 单线程串行处理——绑线程换来无锁，execute 任务队列收编跨线程访问；再看一个慢 handler 如何堵死整条事件循环，业务线程池如何拆弹。',
     defaults: { scenario: 'accept' },
     fields: [{ key: 'scenario', label: '线程模型场景', type: 'select', options: [['accept', '① 主从 Reactor · boss 接入与分发'], ['io', '② 串行无锁 · 一轮 select 多连接'], ['slow', '③ 阻塞传染 · 业务线程池卸载']] }],
@@ -304,7 +304,7 @@ export const labs = [
     source: 'https://netty.io/wiki/thread-model.html',
   },
   {
-    id: 'nacos-config', group: '分布式协调', title: 'Nacos 配置中心与动态刷新', short: 'Nacos 配置中心', icon: 'SlidersHorizontal', tag: '微服务治理', number: '17',
+    id: 'nacos-config', group: '分布式协调', title: 'Nacos 配置中心与动态刷新', short: 'Nacos 配置中心', icon: 'SlidersHorizontal', tag: '微服务治理', number: '03',
     summary: '配置也要管环境、管版本、管回滚：namespace 把 dev/prod 隔成两堵墙，dataId 精确寻址每一份配置；客户端启动全量拉取打底、运行期靠 MD5 指纹识别变更，UDP 秒级推送与 30s 长轮询互为兜底——发布即生效、无需重启，发布错了还能一键回滚。',
     defaults: { scenario: 'publish' },
     fields: [{ key: 'scenario', label: '配置中心场景', type: 'select', options: [['publish', '① 启动拉取 · 全量打底与本地缓存'], ['update', '② 动态刷新 · 发布即生效'], ['namespace', '③ 环境隔离 · 误发布与回滚']] }],
@@ -324,7 +324,7 @@ export const labs = [
     source: 'https://nacos.io/',
   },
   {
-    id: 'mysql-replication', group: '数据与缓存', title: 'MySQL 主从复制与读写分离', short: 'MySQL 主从复制', icon: 'Copy', tag: '数据库原理', number: '18',
+    id: 'mysql-replication', group: '数据与缓存', title: 'MySQL 主从复制与读写分离', short: 'MySQL 主从复制', icon: 'Copy', tag: '数据库原理', number: '04',
     summary: '主库提交先落 binlog，从库 IO 线程接力到 relay log、SQL 线程串行回放——异步留出延迟窗口，半同步用 ack 压窗口，读写分离再把延迟问题摆到路由层：默认读从库卸压，写后即读与关键读强制回主库。',
     defaults: { scenario: 'chain' },
     fields: [{ key: 'scenario', label: '复制场景', type: 'select', options: [['chain', '① 异步复制 · binlog → relay log 全链路'], ['semisync', '② 半同步 · ack 确认与故障切换'], ['split', '③ 读写分离 · 主写从读与读陈旧']] }],
@@ -344,7 +344,7 @@ export const labs = [
     source: 'https://dev.mysql.com/doc/refman/8.0/en/replication.html',
   },
   {
-    id: 'es-sharding', group: '数据与缓存', title: 'ES 分片与集群高可用', short: 'ES 分片集群', icon: 'Network', tag: '搜索引擎', number: '19',
+    id: 'es-sharding', group: '数据与缓存', title: 'ES 分片与集群高可用', short: 'ES 分片集群', icon: 'Network', tag: '搜索引擎', number: '05',
     summary: '文档靠 hash(routing) % 主分片数落位，主分片数建索引时定死、扩容只能 reindex；主分片所在节点宕机，副本自动提升接管；节点分裂时过半 quorum 让少数派自动认怂——green / yellow / red 三个颜色就是集群的体检报告。',
     defaults: { scenario: 'route' },
     fields: [{ key: 'scenario', label: '集群场景', type: 'select', options: [['route', '① 分片路由 · hash % 3 落位'], ['failover', '② 副本提升 · 故障转移'], ['scale', '③ 扩容 reindex · 脑裂防护']] }],
@@ -364,7 +364,7 @@ export const labs = [
     source: 'https://www.elastic.co/guide/en/elasticsearch/reference/current/scalability.html',
   },
   {
-    id: 'rocketmq-ordered', group: '消息中间件', title: 'RocketMQ 顺序消息与延迟消息', short: 'RocketMQ 顺序延迟', icon: 'ListOrdered', tag: '消息队列', number: '20',
+    id: 'rocketmq-ordered', group: '消息中间件', title: 'RocketMQ 顺序消息与延迟消息', short: 'RocketMQ 顺序延迟', icon: 'ListOrdered', tag: '消息队列', number: '06',
     summary: '全局顺序的代价是单队列吞吐，分区有序才是正解：MessageQueueSelector 把同一订单钉在同一队列，消费端单线程串行、失败挂起重试；延迟消息则靠 18 个固定级别 + SCHEDULE_TOPIC 定时转投，到点才现身。',
     defaults: { scenario: 'ordered' },
     fields: [{ key: 'scenario', label: '投递场景', type: 'select', options: [['ordered', '① 分区有序 · 同订单同队列'], ['resend', '② 消费失败 · 挂起重试'], ['delay', '③ 延迟消息 · 定时转投']] }],
@@ -384,7 +384,7 @@ export const labs = [
     source: 'https://rocketmq.apache.org/docs/featureBehavior/03ordermessage',
   },
   {
-    id: 'juc-coordination', group: 'Java 核心', title: 'CountDownLatch / CyclicBarrier / Semaphore', short: 'JUC 同步三件套', icon: 'Users', tag: '并发工具', number: '21',
+    id: 'juc-coordination', group: 'Java 核心', title: 'CountDownLatch / CyclicBarrier / Semaphore', short: 'JUC 同步三件套', icon: 'Users', tag: '并发工具', number: '07',
     summary: '三个线程协作工具各管一种「对齐」：CountDownLatch 等 N 件事齐了一次性放行，CyclicBarrier 让 N 个线程互相等齐且可循环复用，Semaphore 用许可数把并发流量闸在 N 以内。',
     defaults: { scenario: 'countdown' },
     fields: [{ key: 'scenario', label: '协作场景', type: 'select', options: [['countdown', '① CountDownLatch · 等齐再合并'], ['barrier', '② CyclicBarrier · 互相等齐'], ['semaphore', '③ Semaphore · 许可限流']] }],
@@ -404,7 +404,7 @@ export const labs = [
     source: 'https://docs.oracle.com/javase/tutorial/essential/concurrency/sync.html',
   },
   {
-    id: 'mysql-crash', group: '数据与缓存', title: 'InnoDB 事务日志与崩溃恢复', short: 'InnoDB 日志与恢复', icon: 'DatabaseZap', tag: '存储引擎', number: '22',
+    id: 'mysql-crash', group: '数据与缓存', title: 'InnoDB 事务日志与崩溃恢复', short: 'InnoDB 日志与恢复', icon: 'DatabaseZap', tag: '存储引擎', number: '06',
     summary: '提交成功 ≠ 数据页已落盘：WAL 让 redo 日志先行 fsync、数据页留在 Buffer Pool 慢慢刷；实例崩溃后靠 checkpoint + redo 重放找回已提交事务、undo 回滚抹掉未提交事务；redo 与 binlog 之间用两阶段提交对齐崩溃窗口，xid 判定补提交还是回滚。',
     defaults: { scenario: 'wal' },
     fields: [{ key: 'scenario', label: '实验场景', type: 'select', options: [['wal', '① WAL 先行 · 提交与刷脏'], ['crash', '② 崩溃恢复 · redo 重放'], ['twophase', '③ 两阶段提交 · 崩溃窗口']] }],
@@ -424,7 +424,7 @@ export const labs = [
     source: 'https://dev.mysql.com/doc/refman/8.0/en/innodb-redo-log.html',
   },
   {
-    id: 'concurrent-hashmap', group: 'Java 核心', title: 'ConcurrentHashMap 并发写入与扩容', short: 'ConcurrentHashMap', icon: 'Box', tag: '并发容器', number: '23',
+    id: 'concurrent-hashmap', group: 'Java 核心', title: 'ConcurrentHashMap 并发写入与扩容', short: 'ConcurrentHashMap', icon: 'Box', tag: '并发容器', number: '08',
     summary: '写并发不靠全表锁：空槽 CAS 直插、冲突才 synchronized 锁住单个 bin；扩容时已迁槽位放 ForwardingNode，读写自动跟随新表；计数用 baseCount + CounterCell 分流——看 JDK8 如何把并发度从 1 放大到桶数。',
     defaults: { scenario: 'put' },
     fields: [{ key: 'scenario', label: '实验场景', type: 'select', options: [['put', '① 并发写入 · CAS 与 bin 锁'], ['resize', '② 并发扩容 · fwd 迁移'], ['count', '③ 弱一致计数 · 分流']] }],
@@ -444,7 +444,7 @@ export const labs = [
     source: 'https://docs.oracle.com/javase/tutorial/essential/concurrency/collections.html',
   },
   {
-    id: 'mysql-lock', group: '数据与缓存', title: 'InnoDB 行锁 · 间隙锁 · 死锁', short: 'InnoDB 锁与死锁', tag: '锁机制', number: '24',
+    id: 'mysql-lock', group: '数据与缓存', title: 'InnoDB 行锁 · 间隙锁 · 死锁', short: 'InnoDB 锁与死锁', tag: '锁机制', number: '07',
     summary: 'InnoDB 的锁落在「行」上而不是整张表：同写一行时后到者进锁等待队列阻塞排队，普通 SELECT 走 MVCC 快照读不撞锁；RR 隔离级别用间隙锁把行与行之间还不存在的空隙也罩住，幻读从入口被堵死；两个事务互相等对方手里的锁会成环，死锁检测器挑 undo 代价最小的 victim 回滚——应用要做的是捕获 1213 后重试整个事务。',
     defaults: { scenario: 'row' },
     fields: [{ key: 'scenario', label: '实验场景', type: 'select', options: [['row', '① 行锁互斥 · 等待队列'], ['gap', '② 间隙锁 · 防幻读'], ['deadlock', '③ 死锁环 · 检测与回滚']] }],
@@ -464,7 +464,7 @@ export const labs = [
     source: 'https://dev.mysql.com/doc/refman/8.0/en/innodb-locking.html',
   },
   {
-    id: 'kafka-eos', group: '消息中间件', title: 'Kafka 幂等与事务 · 精确一次', short: 'Kafka 幂等与事务', icon: 'ShieldCheck', tag: '消息可靠性', number: '25',
+    id: 'kafka-eos', group: '消息中间件', title: 'Kafka 幂等与事务 · 精确一次', short: 'Kafka 幂等与事务', icon: 'ShieldCheck', tag: '消息可靠性', number: '07',
     summary: 'Kafka 的 exactly-once 由四层拼成：幂等 producer 用 (PID, 序列号) 窗口把「重试的重复」拦在 Broker 门外；跨分区原子交给事务——coordinator 两阶段拍板、各分区写 commit/abort marker、read_committed 消费者用 LSO 把关；旧实例复活想再提交，被递增的 epoch 代数直接驱逐。',
     defaults: { scenario: 'idempotent' },
     fields: [{ key: 'scenario', label: '实验场景', type: 'select', options: [['idempotent', '① 幂等去重 · PID+序列号'], ['transaction', '② 事务 · 跨分区原子'], ['fencing', '③ 僵尸驱逐 · epoch 代数']] }],
@@ -484,7 +484,7 @@ export const labs = [
     source: 'https://kafka.apache.org/documentation/#semantics',
   },
   {
-    id: 'es-write', group: '数据与缓存', title: 'ES 写入路径 · 近实时与段合并', short: 'ES 写入路径', icon: 'Save', tag: '搜索引擎', number: '26',
+    id: 'es-write', group: '数据与缓存', title: 'ES 写入路径 · 近实时与段合并', short: 'ES 写入路径', icon: 'Save', tag: '搜索引擎', number: '08',
     summary: 'ES 的写入是一条「缓冲 + 日志」流水线：文档先落内存 buffer 与 translog，确认写入后对搜索不可见；refresh（默认 1s）把 buffer 快照成内存段才可搜——这就是近实时。段只增不改：更新与删除都是打 tombstone 标记，空间要等后台 merge 把段合并时才真正释放；崩溃恢复则靠 translog 回放，durability 决定 ack 的含金量。',
     defaults: { scenario: 'nrt' },
     fields: [{ key: 'scenario', label: '实验场景', type: 'select', options: [['nrt', '① 近实时 · 写入与可搜'], ['crash', '② 崩溃恢复 · translog 兜底'], ['merge', '③ 段合并 · 空间释放']] }],

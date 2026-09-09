@@ -510,3 +510,83 @@ export const labs = [
 ];
 export const groups = ['Java 核心', 'JVM 专题', 'Redis 专题', '数据与缓存', '消息中间件', '分布式协调'];
 export const getLab = id => labs.find(lab => lab.id === id) || labs.find(lab => lab.id === 'redis');
+
+// 规划中课程（roadmap 标题模块）：主目录与学习中心渲染为「规划中」占位，后续按单课全栈流程细化开发。
+export const planned = [
+  {
+    id: 'threadlocal-leak', group: 'Java 核心', title: 'ThreadLocal 与内存泄漏', short: 'ThreadLocal 与泄漏', icon: 'Box', tag: '并发编程', priority: 'P0',
+    summary: '跟随一次 Web 请求观察 ThreadLocal 的存取：每个线程持有一份 ThreadLocalMap 副本；再放大线程池复用场景，看 key 弱引用兜底与 value 泄漏两条路径，最后用 remove() 治理线程复用下的脏读与泄漏。',
+    scenarios: ['① 请求线程存取 · 每线程一份副本', '② 线程复用 · 弱引用 key 与 value 泄漏', '③ 治理方案 · remove() 与封装'],
+  },
+  {
+    id: 'blocking-queue', group: 'Java 核心', title: '阻塞队列与生产者消费者', short: '阻塞队列', icon: 'ListOrdered', tag: '并发编程', priority: 'P0',
+    summary: '让生产者与消费者同时开工，观察 ArrayBlockingQueue 的环状数组、take/put 的阻塞与唤醒；对比 LinkedBlockingQueue 的双锁拆分，最后用有界队列演示背压如何反传回生产者。',
+    scenarios: ['① 有界阻塞 · put/take 与唤醒', '② 双锁拆分 · 入队出队不互相堵', '③ 背压传递 · 慢消费者反制'],
+  },
+  {
+    id: 'cas-atomic', group: 'Java 核心', title: 'CAS 与原子类 · ABA 问题', short: 'CAS 与原子类', icon: 'Recycle', tag: '并发编程', priority: 'P0',
+    summary: '从乐观并发出发演示 compareAndSet：共享槽位比较-交换与自旋重试；再制造 ABA——线程把值改走又改回，观察无版本号时 CAS 误判通过，加版本号/戳后拦截；对照 LongAdder 的分段计数降竞争。',
+    scenarios: ['① CAS 自旋 · 比较并交换', '② ABA 复现 · 版本号拦截', '③ LongAdder · 分段降竞争'],
+  },
+  {
+    id: 'mysql-sharding', group: '数据与缓存', title: 'MySQL 分库分表', short: '分库分表', icon: 'Table2', tag: '数据库', priority: 'P0',
+    summary: '让订单表跨 4 个库 8 张表分布，观察取模分片的寻址与路由；制造扩容场景对比 2 库 → 4 库的 rehash 全量迁移代价；最后用一致性哈希演示平滑扩容，只搬动少量节点。',
+    scenarios: ['① 取模分片 · 路由到表', '② 扩容之痛 · rehash 全量搬', '③ 一致性哈希 · 平滑迁移'],
+  },
+  {
+    id: 'kafka-consumer', group: '消息中间件', title: 'Kafka 消费组与 Rebalance', short: 'Kafka 消费组', icon: 'Users', tag: '消息可靠性', priority: 'P0',
+    summary: '让 4 个消费者订阅 6 分区主题，观察分区分配策略与每条消息被组内唯一消费；再演示消费者加入/退出/宕机触发 rebalance 的 Stop-The-World 窗口，最后对比 eager 与 cooperative 两种协议下的分区交接。',
+    scenarios: ['① 组内分配 · 分区归属', '② Rebalance 触发 · 全组暂停', '③ 增量协作 · cooperative 交接'],
+  },
+  {
+    id: 'zk-lock', group: '分布式协调', title: 'ZooKeeper Watch 与分布式锁', short: 'ZK Watch 与分布式锁', icon: 'Lock', tag: '协调服务', priority: 'P0',
+    summary: '从临时顺序节点出发观察分布式锁的完整生命周期：多个客户端排队抢锁、Watch 监听前驱释放、锁释放后惊群与排队两种唤醒对比；最后演示会话失效时锁的快速失败语义与羊群效应控制。',
+    scenarios: ['① 临时节点 · 抢占与释放', '② 顺序节点 · 公平排队', '③ 惊群对比 · Watch 精准唤醒'],
+  },
+  {
+    id: 'mysql-explain', group: '数据与缓存', title: 'EXPLAIN 执行计划与索引选择', short: 'EXPLAIN 执行计划', icon: 'Search', tag: '数据库', priority: 'P1',
+    summary: '从一条 SQL 出发观察优化器生成的执行计划：type 从 ALL 全表扫到 ref/range 的走索引变化，key_len 与 rows 估算；再制造索引失效场景（函数包裹、隐式转换、前导列缺失），最后演示优化器选错索引与 FORCE/USE 纠正。',
+    scenarios: ['① 读懂执行计划 · type/key/rows', '② 索引失效 · 常见反模式', '③ 选错索引 · 纠正手段'],
+  },
+  {
+    id: 'es-query', group: '数据与缓存', title: 'ES 查询相关性与 BM25 打分', short: 'ES 查询与打分', icon: 'SlidersHorizontal', tag: '搜索引擎', priority: 'P1',
+    summary: '让同一查询命中多篇文档，观察 BM25 的 TF/IDF 两项如何合成相关性得分——词频饱和曲线与稀有词加权；再对比 match 短语与 term 的语义差异，最后演示 boosting 与 function_score 如何按业务调整排序。',
+    scenarios: ['① BM25 · 词频与稀有度', '② 查询语义 · match/term/短语', '③ 排序干预 · boost 与 function_score'],
+  },
+  {
+    id: 'kafka-storage', group: '消息中间件', title: 'Kafka 日志存储与零拷贝', short: 'Kafka 日志存储', icon: 'Archive', tag: '消息可靠性', priority: 'P1',
+    summary: '剖开 Broker 的 log 目录：主题-分区-日志段三层结构、offset 到文件的二分寻址、index 与 log 文件配对；再演示一条消息从 page cache 到网卡直发的零拷贝路径，对比传统四次拷贝的读放大；最后用分段滚动解释日志删除与磁盘回收。',
+    scenarios: ['① 日志结构 · 分区与段', '② 零拷贝 · 内核直达网卡', '③ 段滚动 · 删除与回收'],
+  },
+  {
+    id: 'seata-tx', group: '分布式协调', title: 'Seata 分布式事务 · AT 回滚', short: 'Seata AT 事务', icon: 'ShieldAlert', tag: '协调服务', priority: 'P1',
+    summary: '让一个订单创建跨库写三张表，观察 AT 模式的 TM/TC/RM 三角色：全局事务开启、各分支注册与二阶段提交；再让中间分支失败，演示 undo_log 回滚镜像的逆向补偿，最后对比 AT 与 TCC 对业务侵入的差异。',
+    scenarios: ['① 全局事务 · 分支注册与二阶段', '② 失败补偿 · undo_log 逆向回滚', '③ 模式对比 · AT 与 TCC'],
+  },
+  {
+    id: 'completable-future', group: 'Java 核心', title: 'CompletableFuture 异步编排', short: 'CompletableFuture', icon: 'Waypoints', tag: '并发编程', priority: 'P2',
+    summary: '把一条串行调用链拆成并行扇出：thenApply/thenCombine 组装依赖、allOf 汇聚多路结果；再演示异常在回调链上的传播与 exceptionally 兜底，最后用自定义线程池对比 commonPool 下的阻塞传染。',
+    scenarios: ['① 链式组装 · 串行与并行', '② 异常传播 · exceptionally 兜底', '③ 线程池隔离 · 避免阻塞传染'],
+  },
+  {
+    id: 'jvm-jit', group: 'JVM 专题', module: 'JVM', phase: '性能与诊断', title: 'JIT 热点编译与内联', short: 'JIT 热点编译', icon: 'Cpu', tag: '执行引擎', priority: 'P2',
+    summary: '让同一方法反复执行越过阈值，观察解释执行 → C1 编译 → C2 深度优化的分级过程与方法计数；再演示内联如何消除调用开销、逃逸分析如何做栈上分配与锁消除，最后用 -XX 参数对比编译门槛对启动与峰值的取舍。',
+    scenarios: ['① 分级编译 · 阈值与热度', '② 内联与逃逸分析', '③ 编译参数 · 启动与峰值的取舍'],
+  },
+  {
+    id: 'rabbitmq-cluster', group: '消息中间件', title: 'RabbitMQ 集群与镜像队列', short: 'RabbitMQ 集群', icon: 'Server', tag: '高可用', priority: 'P2',
+    summary: '把三个 broker 组成集群观察队列的节点归属与路由；再让单节点宕机，对比普通队列的可用性缺口与镜像/仲裁队列的副本接管；最后演示客户端连接故障转移与 quorum 队列的多数派写入语义。',
+    scenarios: ['① 集群拓扑 · 队列归属与路由', '② 节点宕机 · 镜像与仲裁接管', '③ 多数派写入 · quorum 语义'],
+  },
+  {
+    id: 'rocketmq-dledger', group: '消息中间件', title: 'RocketMQ 主从与 DLedger 高可用', short: 'RocketMQ 高可用', icon: 'ShieldCheck', tag: '高可用', priority: 'P2',
+    summary: '让主节点崩溃，对比主从异步复制的消息缺口与 DLedger 多副本多数派写入的零切换成本；再演示 Raft 选主如何从三个副本中选出新主、旧主复活后如何以 follower 身份追平日志。',
+    scenarios: ['① 主从复制 · 切换与丢失窗口', '② Raft 选主 · 多数派接管', '③ 旧主复活 · 追平日志'],
+  },
+  {
+    id: 'zab', group: '分布式协调', title: 'ZAB 协议与崩溃恢复', short: 'ZAB 协议', icon: 'RefreshCw', tag: '协调服务', priority: 'P2',
+    summary: '剖开 ZooKeeper 的一致性内核：观察 Leader 如何把写请求广播给 Follower 并在多数派 ack 后提交，事务的 FIFO 顺序；再让 Leader 崩溃，演示 zxid 纪元比较与崩溃恢复阶段如何选出日志最新的节点、确保已提交事务不丢。',
+    scenarios: ['① 广播 · 两阶段提交写', '② Leader 崩溃 · 选主', '③ 恢复 · 新纪元与日志同步'],
+  },
+];
+

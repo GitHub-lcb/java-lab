@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, DatabaseZap, Info, Play, RotateCcw, Terminal } from 'lucide-react';
 import { createSessionId, executeCommand, runtimeStatus } from './redisRuntime.js';
+import { describeGatewayError } from './gatewayErrors.js';
 import { advanceLesson, createRun, lessonSession } from './realLesson.js';
 import { realLabCatalog } from './realLabCatalog.js';
 
@@ -55,8 +56,9 @@ export default function RealRedisLab({ lesson, onComplete, onProgress, active })
         setFeedback({ passed: false, text });
       }
     } catch (error) {
-      setHistory(previous => [...previous.slice(-99), { command: current, output: error.message, ok: false }]);
-      setFeedback({ passed: false, text: '本次未获得可验证结果。若请求超时，写入可能已执行，请先查询实际状态；不要直接重复扣减。' });
+      const human = describeGatewayError(error);
+      setHistory(previous => [...previous.slice(-99), { command: current, output: human.title, detail: human.detail, ok: false }]);
+      setFeedback({ passed: false, text: human.hint ? `${human.title}。${human.hint}` : human.title });
     } finally { setBusy(false); busyRef.current = false; }
   }
   function restart() {
@@ -82,7 +84,7 @@ export default function RealRedisLab({ lesson, onComplete, onProgress, active })
     <div className="guided-current">
       {stage ? <><div><strong>步骤 {run.index + 1} · {stage.title}</strong><code>{stage.command}</code></div><p><span>预期返回</span>{stage.expectText}</p></> : <div><strong><Check size={17} />本轮 {guide.steps.length} 步均已通过返回值验证</strong><p>{guide.scope}</p></div>}
     </div>
-    <div className="guided-log terminal-history" ref={logRef} aria-label="真实执行记录">{history.length ? history.map((entry, index) => <div className={entry.ok ? '' : 'error'} key={index}><span className="terminal-prompt">redis&gt;</span><code>{entry.command}</code><pre>{entry.output}</pre><small>{entry.verified ? '步骤验证通过' : entry.ok ? '命令已执行' : '执行失败'}</small></div>) : <div className="terminal-empty"><DatabaseZap size={26} /><p>{guide.objective}</p></div>}</div>
+    <div className="guided-log terminal-history" ref={logRef} aria-label="真实执行记录">{history.length ? history.map((entry, index) => <div className={entry.ok ? '' : 'error'} key={index}><span className="terminal-prompt">redis&gt;</span><code>{entry.command}</code><pre>{entry.output}</pre>{entry.detail ? <details className="terminal-error-detail"><summary>原始错误信息</summary><code>{entry.detail}</code></details> : null}<small>{entry.verified ? '步骤验证通过' : entry.ok ? '命令已执行' : '执行失败'}</small></div>) : <div className="terminal-empty"><DatabaseZap size={26} /><p>{guide.objective}</p></div>}</div>
     {feedback && <p className={`guided-feedback ${feedback.passed ? 'passed' : ''}`} role="status"><Info size={15} />{feedback.text}</p>}
     <form className="terminal-command" onSubmit={execute}><span>&gt;</span><input aria-label="Redis 命令" value={command} onChange={event => setCommand(event.target.value)} maxLength={512} spellCheck="false" autoComplete="off" /><button type="submit" disabled={busy || !status.redis || !command.trim()}><Play size={15} />{busy ? '执行中' : '执行'}</button></form>
   </section>;

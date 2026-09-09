@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, CircleAlert, Cpu, Info, RotateCcw } from 'lucide-react';
 import { fetchJvmProbe } from './jvmRuntime.js';
+import { describeGatewayError } from './gatewayErrors.js';
 import { jvmProbeCatalog } from './jvmProbeCatalog.js';
 
 const API_BASE = import.meta.env.VITE_REDIS_LAB_API || 'http://127.0.0.1:8787';
@@ -20,14 +21,17 @@ export function JvmProbeAside({ lesson }) {
 }
 export default function RealJvmLab({ lesson }) {
   const config = jvmProbeCatalog[lesson.id];
-  const [state, setState] = useState({ loading: true, data: null, error: '' });
+  const [state, setState] = useState({ loading: true, data: null, error: '', hint: '', detail: '' });
   async function run() {
-    setState({ loading: true, data: null, error: '' });
+    setState({ loading: true, data: null, error: '', hint: '', detail: '' });
     try {
       const result = await fetchJvmProbe((url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(8000) }), API_BASE, config.probe);
-      setState({ loading: false, data: result.data, error: '' });
-    } catch (error) { setState({ loading: false, data: null, error: error.message, offline: error instanceof TypeError || error.name === 'TimeoutError' }); }
+      setState({ loading: false, data: result.data, error: '', hint: '', detail: '' });
+    } catch (error) {
+      const human = describeGatewayError(error);
+      setState({ loading: false, data: null, error: human.title, hint: human.hint, detail: human.detail });
+    }
   }
   useEffect(() => { run(); }, [lesson.id]);
-  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} /><p>{state.error}</p>{state.offline && <p className="probe-hint"><Info size={13} />需要本机 Java 网关：在项目根目录执行 <code>npm run backend</code>（首次先 <code>npm ci</code>；需 JDK 8+ 的 <code>javac</code>），启动后点「重新采样」。</p>}</div> : <ProbeData data={state.data} />}</div></section>;
+  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} /><p>{state.error}</p>{state.hint ? <p className="probe-hint"><Info size={13} />{state.hint}</p> : null}{state.detail ? <details className="terminal-error-detail"><summary>原始错误信息</summary><code>{state.detail}</code></details> : null}</div> : <ProbeData data={state.data} />}</div></section>;
 }

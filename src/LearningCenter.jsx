@@ -83,7 +83,7 @@ function ReviewView({ stages, learningState, onAnswer, onOpenLesson, onDirtyChan
 
 function ReportView({ moduleConfig, lessons, completed, assessments, challengeRuns, learningState }) {
   const report = getLearningReport({ lessons, completed, assessments, challengeRuns, stages: moduleConfig.stages, learningState });
-  const rows = [['实验完成', report.experiments], ['对照场景', report.challenges], ['课后验证', report.quizzes], ['阶段测验', report.stageAssessments]];
+  const rows = [['实验完成', report.experiments], ['对照任务', report.challenges], ['验证题', report.quizzes], ['阶段测验', report.stageAssessments]];
   return <div className="report-view"><div className="report-heading"><div><span>READINESS</span><strong>{report.readiness}<small>%</small></strong><p>{moduleConfig.reportDescription}</p></div><div><span>已掌握课程</span><strong>{report.mastered}<small> / {lessons.length}</small></strong><span>待复习知识点</span><strong>{report.weak}</strong></div></div><div className="report-rows">{rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value.done}<small> / {value.total}</small></strong><span>{value.done === value.total ? '已完成' : '继续学习'}</span></div>)}</div><div className="report-note"><Info {...iconProps} /><p>{report.readiness === 100 && report.weak === 0 ? moduleConfig.completionNote : moduleConfig.nextNote}</p></div></div>;
 }
 

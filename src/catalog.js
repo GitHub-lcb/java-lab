@@ -103,7 +103,7 @@ export const labs = [
     summary: '对比索引定位与全表扫描，观察 B+ 树叶子页和记录的访问路径。',
     defaults: { indexed: true, target: 42 },
     fields: [{ key: 'target', label: '查询 ID', min: 1, max: 64, unit: '' }, { key: 'indexed', label: '使用主键索引', type: 'toggle' }],
-    metrics: [['reads', '访问页数', '页'], ['scanned', '检查记录', '行'], ['target', '目标 ID', ''], ['found', '查询结果', '']],
+    metrics: [['reads', '访问页数', '页'], ['scanned', '检查记录', '行'], ['target', '目标 ID', ''], ['found', '查询结果', '', ['命中', '未命中']]],
     nodes: [['query', 'SQL 查询', 'WHERE id = ?', 'CodeXml', 'blue'], ['index', 'B+ 树根页', '17 | 33 | 49', 'Network', 'yellow'], ['leaf', '叶子数据页', 'Clustered index', 'Table2', 'green'], ['result', '查询结果', 'Row data', 'FileCheck2', 'pink']],
     edges: [['query', 'index', '索引定位'], ['index', 'leaf', '定位叶子页'], ['leaf', 'result', '返回记录']],
     code: ['SELECT * FROM users WHERE id = ?;', '// B+ tree: search root page', '// Clustered leaf: locate the row within the page', '// Full scan: examine records page by page', '// Return the matching row'],

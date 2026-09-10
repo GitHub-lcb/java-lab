@@ -17,7 +17,7 @@ function ProbeData({ data }) {
 }
 export function JvmProbeAside({ lesson }) {
   const config = jvmProbeCatalog[lesson.id];
-  return <aside className="real-aside" aria-label="JDK 实机观测说明"><div className="panel-title"><h2><Cpu size={16} />JDK 实机</h2><span className="real-badge"><i />白名单</span></div><div className="real-aside-title">{config.objective}</div><div className="probe-evidence">{config.evidence.map(item => <p key={item}><Activity size={13} />{item}</p>)}</div><div className="real-aside-note"><Info size={15} /><p>{config.boundary}</p></div><div className="real-aside-note"><CircleAlert size={15} /><p>探针固定在项目代码中，不接受任意 Java 源码、类名、启动参数或系统命令。</p></div></aside>;
+  return <aside className="real-aside" aria-label="JDK 实机观测说明"><div className="panel-title"><h2><Cpu size={16} aria-hidden="true" />JDK 实机</h2><span className="real-badge"><i />白名单</span></div><div className="real-aside-title">{config.objective}</div><div className="probe-evidence">{config.evidence.map(item => <p key={item}><Activity size={13} aria-hidden="true" />{item}</p>)}</div><div className="real-aside-note"><Info size={15} aria-hidden="true" /><p>{config.boundary}</p></div><div className="real-aside-note"><CircleAlert size={15} aria-hidden="true" /><p>探针固定在项目代码中，不接受任意 Java 源码、类名、启动参数或系统命令。</p></div></aside>;
 }
 export default function RealJvmLab({ lesson }) {
   const config = jvmProbeCatalog[lesson.id];
@@ -33,5 +33,5 @@ export default function RealJvmLab({ lesson }) {
     }
   }
   useEffect(() => { run(); }, [lesson.id]);
-  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} /><p>{state.error}</p>{state.hint ? <p className="probe-hint"><Info size={13} />{state.hint}</p> : null}{state.detail ? <details className="terminal-error-detail"><summary>原始错误信息</summary><code>{state.detail}</code></details> : null}</div> : <ProbeData data={state.data} />}</div></section>;
+  return <section className="jvm-probe" aria-label="真实 JDK 观测"><div className="probe-toolbar"><span><Cpu size={16} aria-hidden="true" />{config.title}</span><button onClick={run} disabled={state.loading}><RotateCcw size={14} aria-hidden="true" />重新采样</button></div><div className="probe-content" aria-live="polite">{state.loading ? <div className="probe-empty"><Activity size={25} aria-hidden="true" /><p>正在读取本机 Java 网关的真实 JVM 数据</p></div> : state.error ? <div className="probe-empty error"><CircleAlert size={25} aria-hidden="true" /><p>{state.error}</p>{state.hint ? <p className="probe-hint"><Info size={13} aria-hidden="true" />{state.hint}</p> : null}{state.detail ? <details className="terminal-error-detail"><summary>原始错误信息</summary><code>{state.detail}</code></details> : null}</div> : <ProbeData data={state.data} />}</div></section>;
 }
